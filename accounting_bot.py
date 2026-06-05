@@ -1,13 +1,27 @@
 import re
+import os
 import sqlite3
+import threading
 from collections import defaultdict
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 
-import os
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8384224470:AAEFO7BQGyViHUKDP2dQav3BKRPq8sIq2tU")
 DB_PATH = os.environ.get("DB_PATH", "accounts.db")
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, *args):
+        pass
+
+def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    HTTPServer(("0.0.0.0", port), HealthHandler).serve_forever()
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -28,47 +42,13 @@ def init_db():
     c.execute("INSERT OR IGNORE INTO rates VALUES ('CNY', 4.65)")
     c.execute("INSERT OR IGNORE INTO rates VALUES ('USDT', 33.0)")
     conn.commit()
-    try:
-        c.execute("ALTER TABLE records ADD COLUMN currency TEXT DEFAULT 'TWD'")
-        conn.commit()
-    except Exception:
-        pass
-    # creditor: '' = personal mode (owes YOU); 'Name' = group expense mode (owes that person)
-    try:
-        c.execute("ALTER TABLE records ADD COLUMN creditor TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        pass
+    for col in ["currency TEXT DEFAULT 'TWD'", "creditor TEXT DEFAULT ''"]:
+        try:
+            c.execute(f"ALTER TABLE records ADD COLUMN {col}")
+            conn.commit()
+        except Exception:
+            pass
     conn.close()
-
-def add_expense_record(debtor, creditor, amount, currency, note):
-    """Group expense: debtor owes creditor the amount."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    date = datetime.now().strftime("%Y/%m/%d")
-    c.execute(
-        "INSERT INTO records (person, creditor, amount, currency, note, date, type) VALUES (?, ?, ?, ?, ?, ?, 'owe')",
-        (debtor.strip(), creditor.strip(), amount, (currency or "TWD").upper(), note, date)
-    )
-    conn.commit()
-    conn.close()
-
-def get_group_balances():
-    """Net balance for group expenses (creditor != '')."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    # Get all group expense records
-    c.execute("""
-        SELECT person, creditor, currency,
-               SUM(CASE WHEN type='owe' THEN amount ELSE -amount END) AS amount
-        FROM records
-        WHERE creditor != '' AND creditor IS NOT NULL
-        GROUP BY person, creditor, currency
-        HAVING amount != 0
-    """)
-    rows = c.fetchall()
-    conn.close()
-    return rows
 
 def get_rate(currency):
     currency = (currency or "TWD").upper()
@@ -107,6 +87,17 @@ def add_record(person, amount, currency, note, record_type):
     conn.commit()
     conn.close()
 
+def add_expense_record(debtor, creditor, amount, currency, note):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    date = datetime.now().strftime("%Y/%m/%d")
+    c.execute(
+        "INSERT INTO records (person, creditor, amount, currency, note, date, type) VALUES (?, ?, ?, ?, ?, ?, 'owe')",
+        (debtor.strip(), creditor.strip(), amount, (currency or "TWD").upper(), note, date)
+    )
+    conn.commit()
+    conn.close()
+
 def get_person_records(person):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -119,13 +110,28 @@ def get_all_balances():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-        SELECT person,
-               COALESCE(currency, 'TWD') as currency,
-               SUM(CASE WHEN type='owe' THEN amount ELSE -amount END) AS balance
+        SELECT person, COALESCE(currency,'TWD') as cur,
+               SUM(CASE WHEN type='owe' THEN amount ELSE -amount END) AS bal
         FROM records
-        GROUP BY person, COALESCE(currency, 'TWD')
-        HAVING balance != 0
-        ORDER BY person, currency
+        WHERE COALESCE(creditor,'') = ''
+        GROUP BY person, COALESCE(currency,'TWD')
+        HAVING bal != 0
+        ORDER BY person, cur
+    """)
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_group_balances():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        SELECT person, creditor, COALESCE(currency,'TWD'),
+               SUM(CASE WHEN type='owe' THEN amount ELSE -amount END) AS amt
+        FROM records
+        WHERE creditor != '' AND creditor IS NOT NULL
+        GROUP BY person, creditor, COALESCE(currency,'TWD')
+        HAVING amt != 0
     """)
     rows = c.fetchall()
     conn.close()
@@ -173,28 +179,28 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*[-- 记账机器人指令 --]*\n\n"
         "*记欠款：*\n"
         "`/owe A 500` - A 欠你 500 TWD\n"
-        "`/owe A 500 cny 备注` - 指定货币+备注\n"
-        "`/owe A 500 B 300 C 200` - 多人一次记\n\n"
+        "`/owe A 500 cny 备注` - 含货币+备注\n"
+        "`/owe A 500 B 300 C 200` - 多人同记\n\n"
         "*分摊账单：*\n"
-        "`/split 备注 总额 A份额 B份额 C份额` - 不等分\n"
+        "`/split 备注 总额 A 份额 B 份额 C 份额`\n"
         "  `/split 晚餐 3000 A 1000 B 1000 C 1000`\n"
         "`/split 备注 总额 [货币] A B C` - 等分\n"
         "  `/split 晚餐 3000 cny A B C`\n\n"
         "*还款：*\n"
         "`/paid A 500` - A 还了 500 TWD\n"
-        "`/paid A 200 cny` - 指定货币\n\n"
+        "`/paid A 200 cny` - 含货币\n\n"
         "*查询：*\n"
         "`/check` - 所有人欠款总览\n"
-        "`/bill A` - 查某人所有明细\n\n"
-        "*多人分账（旅行/聚餐）：*\n"
-        "`/expense A 10000 cny A B C` - A付款，三人等分\n"
+        "`/bill A` - 某人所有明细\n\n"
+        "*多人分账：*\n"
+        "`/expense A 10000 cny A B C` - A付，三人等分\n"
         "`/expense A 10000 cny B 3000 C 7000` - 不等分\n"
-        "`/settle` - 计算最终谁付谁多少\n\n"
+        "`/settle` - 最终谁付谁多少\n\n"
         "*删除：*\n"
-        "`/clear A` - 删除某人所有记录\n"
-        "`/clearall` - 清空全部记录\n\n"
+        "`/clear A` - 删某人记录\n"
+        "`/clearall confirm` - 清空全部\n\n"
         "*汇率：*\n"
-        "`/rate` - 查看当前汇率\n"
+        "`/rate` - 查看汇率\n"
         "`/rate cny 4.65` - 设 1 CNY = 4.65 TWD\n"
         "`/rate usdt 33` - 设 1 USDT = 33 TWD\n\n"
         "_默认货币：TWD_"
@@ -204,7 +210,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     name = update.effective_user.full_name
-    await update.message.reply_text(f"你的 Telegram ID 是：`{uid}`\n名字：{name}", parse_mode="Markdown")
+    await update.message.reply_text(f"ID: `{uid}`\nName: {name}", parse_mode="Markdown")
 
 async def cmd_rate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -332,7 +338,7 @@ async def cmd_split(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if eq:
             line += f" ({eq})"
         saved.append(line)
-    msg = f"OK [{note}] split done\nTotal: {fmt(total, currency)}"
+    msg = f"OK [{note}] Total: {fmt(total, currency)}"
     eq = twd_equiv(total, currency)
     if eq:
         msg += f" ({eq})"
@@ -392,4 +398,188 @@ async def cmd_bill(update: Update, context: ContextTypes.DEFAULT_TYPE):
     records = get_person_records(person)
     if not records:
         await update.message.reply_text(f"No records for {person}")
-        r
+        return
+    msg = f"*{person} Statement*\n\n"
+    totals = defaultdict(float)
+    for date, amount, currency, rtype, note in records:
+        cur = currency or "TWD"
+        sign = "+" if rtype == "owe" else "-"
+        msg += f"{date} {sign}{fmt(amount, cur)}"
+        if note:
+            msg += f" {note}"
+        msg += "\n"
+        totals[cur] += amount if rtype == "owe" else -amount
+    msg += "\n"
+    for currency, total in totals.items():
+        if total > 0:
+            msg += f"Owes you: *{fmt(total, currency)}*"
+            rate = get_rate(currency)
+            if rate and currency != "TWD":
+                msg += f" (~{total*rate:,.0f} TWD)"
+            msg += "\n"
+        elif total < 0:
+            msg += f"You owe: *{fmt(abs(total), currency)}*\n"
+        else:
+            msg += f"{currency} settled\n"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Format: `/clear A`", parse_mode="Markdown")
+        return
+    person = " ".join(context.args)
+    n = clear_person(person)
+    if n:
+        await update.message.reply_text(f"OK: deleted {n} records for {person}")
+    else:
+        await update.message.reply_text(f"No records for {person}")
+
+async def cmd_clearall(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args or args[0].lower() != "confirm":
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM records")
+        n = c.fetchone()[0]
+        conn.close()
+        await update.message.reply_text(
+            f"Total {n} records. To delete ALL, send:\n`/clearall confirm`",
+            parse_mode="Markdown"
+        )
+        return
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM records")
+    n = c.rowcount
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(f"OK: cleared all {n} records.")
+
+async def cmd_expense(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = list(context.args)
+    if len(args) < 3:
+        await update.message.reply_text(
+            "Format:\n`/expense A 10000 cny A B C` (equal split)\n`/expense A 10000 cny B 3000 C 7000` (unequal)",
+            parse_mode="Markdown"
+        )
+        return
+    payer = args[0]
+    total, currency = parse_amount_currency(args[1])
+    if total is None:
+        await update.message.reply_text("Invalid total amount")
+        return
+    rest = args[2:]
+    if rest and rest[0].upper() in ("CNY", "TWD", "USDT"):
+        currency = rest[0].upper()
+        rest = rest[1:]
+    if not rest:
+        await update.message.reply_text("Please list who splits this expense")
+        return
+    splits = {}
+    all_names = all(not re.match(r"^\d", r) for r in rest)
+    if all_names:
+        per = total / len(rest)
+        for name in rest:
+            splits[name] = per
+    else:
+        i = 0
+        while i < len(rest):
+            name = rest[i]
+            if i + 1 < len(rest):
+                amt, _ = parse_amount_currency(rest[i + 1], currency)
+                if amt is not None:
+                    splits[name] = amt
+                    i += 2
+                    continue
+            splits[name] = None
+            i += 1
+        assigned = sum(v for v in splits.values() if v is not None)
+        no_amt = [k for k, v in splits.items() if v is None]
+        if no_amt:
+            per = (total - assigned) / len(no_amt)
+            for name in no_amt:
+                splits[name] = per
+    saved = []
+    for person, share in splits.items():
+        if person.lower() == payer.lower():
+            continue
+        add_expense_record(person, payer, share, currency, "")
+        line = f"  {person} owes {payer}: {fmt(share, currency)}"
+        eq = twd_equiv(share, currency)
+        if eq:
+            line += f" ({eq})"
+        saved.append(line)
+    msg = f"OK [{payer} paid {fmt(total, currency)}"
+    eq = twd_equiv(total, currency)
+    if eq:
+        msg += f" ({eq})"
+    msg += "]\n"
+    msg += "\n".join(saved) if saved else "No debts (only payer listed)"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def cmd_settle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = get_group_balances()
+    if not rows:
+        await update.message.reply_text("No group expenses. Use `/expense` to log shared expenses.", parse_mode="Markdown")
+        return
+    net = defaultdict(lambda: defaultdict(float))
+    for debtor, creditor, currency, amount in rows:
+        net[debtor][currency] -= amount
+        net[creditor][currency] += amount
+    msg = "*Group Settlement*\n\n*Net balances:*\n"
+    for person in sorted(net.keys()):
+        for currency, balance in sorted(net[person].items()):
+            if balance > 0:
+                msg += f"  {person} is owed {fmt(balance, currency)}\n"
+            elif balance < 0:
+                msg += f"  {person} owes {fmt(abs(balance), currency)}\n"
+    msg += "\n*Suggested payments:*\n"
+    all_currencies = set(c for balances in net.values() for c in balances)
+    for currency in all_currencies:
+        creditors = sorted([(p, net[p][currency]) for p in net if net[p][currency] > 0.5], key=lambda x: -x[1])
+        debtors = sorted([(p, -net[p][currency]) for p in net if net[p][currency] < -0.5], key=lambda x: -x[1])
+        i = j = 0
+        while i < len(creditors) and j < len(debtors):
+            cn, ca = creditors[i]
+            dn, da = debtors[j]
+            pay = min(ca, da)
+            if pay > 0.5:
+                msg += f"  {dn} pays {cn} {fmt(pay, currency)}\n"
+            creditors[i] = (cn, ca - pay)
+            debtors[j] = (dn, da - pay)
+            if creditors[i][1] < 0.5:
+                i += 1
+            if debtors[j][1] < 0.5:
+                j += 1
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text == "查账":
+        await cmd_check(update, context)
+    elif text == "汇率":
+        await cmd_rate(update, context)
+
+def main():
+    init_db()
+    threading.Thread(target=start_health_server, daemon=True).start()
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("myid",    cmd_myid))
+    app.add_handler(CommandHandler("start",   cmd_help))
+    app.add_handler(CommandHandler("help",    cmd_help))
+    app.add_handler(CommandHandler("rate",    cmd_rate))
+    app.add_handler(CommandHandler("owe",     cmd_owe))
+    app.add_handler(CommandHandler("split",   cmd_split))
+    app.add_handler(CommandHandler("paid",    cmd_paid))
+    app.add_handler(CommandHandler("check",   cmd_check))
+    app.add_handler(CommandHandler("bill",    cmd_bill))
+    app.add_handler(CommandHandler("clear",   cmd_clear))
+    app.add_handler(CommandHandler("clearall",cmd_clearall))
+    app.add_handler(CommandHandler("expense", cmd_expense))
+    app.add_handler(CommandHandler("settle",  cmd_settle))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("Bot started OK")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
