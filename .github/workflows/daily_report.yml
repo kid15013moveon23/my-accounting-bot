@@ -1,0 +1,22 @@
+name: 每日数据汇报
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install gspread google-auth python-telegram-bot==21.6 pytz
+      - name: 发送日报
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
+        run: python send_report.py
