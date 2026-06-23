@@ -13,10 +13,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: 安装依赖
-        run: pip install gspread google-auth python-telegram-bot==21.6 pytz
+        run: pip install gspread google-auth python-telegram-bot==21.6 pytz anthropic
       - name: 发送日报
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         run: python send_report.py
