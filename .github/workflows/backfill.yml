@@ -1,0 +1,22 @@
+name: 历史数据回填（手动触发）
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install gspread google-auth pytz
+      - name: 执行回填
+        env:
+          GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
+          HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
+        run: python backfill_history.py
