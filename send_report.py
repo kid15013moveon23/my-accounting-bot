@@ -268,7 +268,6 @@ def build_summary(label: str, members: list, results: dict) -> str:
 
 # ─── History: Save ────────────────────────────────────────────────────────────
 def save_to_history(yesterday: datetime, dept_raw: dict):
-    """保存当日数据到历史 Google Sheet"""
     if not HISTORY_SHEET_ID:
         print("[History] 未设置 HISTORY_SHEET_ID，跳过保存")
         return
@@ -277,7 +276,6 @@ def save_to_history(yesterday: datetime, dept_raw: dict):
         ws = ss.worksheets()[0]
         all_data = ws.get_all_values()
 
-        # 初始化表头
         if not all_data or not any(cell.strip() for cell in all_data[0]):
             header = ['日期', '部门', '组别', '注册', '首存', '存款', '提款', '存提差', '活跃']
             ws.update(range_name='A1', values=[header])
@@ -306,7 +304,6 @@ def save_to_history(yesterday: datetime, dept_raw: dict):
 
 # ─── History: Load & Compare ──────────────────────────────────────────────────
 def load_history(yesterday: datetime) -> dict:
-    """读取历史数据，返回对比所需结构（不含今日）"""
     if not HISTORY_SHEET_ID:
         return {}
     try:
@@ -361,10 +358,9 @@ def load_history(yesterday: datetime) -> dict:
         day_before = yesterday - timedelta(days=1)
         week_ago   = yesterday - timedelta(days=7)
 
-        # 月对比（历史部分，不含今日）
-        month_start     = yesterday.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        days_elapsed    = yesterday.day - 1   # 本月1日到昨日的天数（不含昨日，因今日才抓）
-        last_month_end  = month_start - timedelta(days=1)
+        month_start      = yesterday.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        days_elapsed     = yesterday.day - 1
+        last_month_end   = month_start - timedelta(days=1)
         last_month_start = last_month_end.replace(day=1)
         last_month_same  = last_month_start + timedelta(days=days_elapsed - 1)
 
@@ -374,9 +370,9 @@ def load_history(yesterday: datetime) -> dict:
         return {
             '前日数据':     day_data(day_before),
             '7天前数据':    day_data(week_ago),
-            '本月历史累计': history_month,   # 本月 1 日到前日（不含今日）
+            '本月历史累计': history_month,
             '上月同期累计': last_month,
-            '本月天数':     yesterday.day,    # 含今日
+            '本月天数':     yesterday.day,
         }
     except Exception as e:
         print(f"[History Load Error] {e}")
@@ -390,7 +386,6 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
     def group_sum(members: list, field: str, source: dict) -> float:
         return sum(parse_num((source.get(m) or {}).get(field, '0')) for m in members)
 
-    # 今日各部门
     today_depts = {}
     for dept in DEPARTMENTS:
         label = dept["label"]
@@ -406,7 +401,6 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
         },
     }
 
-    # 历史对比
     if history:
         prev = history.get('前日数据', {})
         w7   = history.get('7天前数据', {})
@@ -417,18 +411,10 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
                 "RT": {f: fmt_num(group_sum(rt_members, f, prev)) for f in SUMMARY_FIELDS},
             }
             payload["日环比（今日 vs 前日）"] = {
-                "MT存款": pct_change(
-                    group_sum(mt_members, '存款', dept_raw),
-                    group_sum(mt_members, '存款', prev)),
-                "RT存款": pct_change(
-                    group_sum(rt_members, '存款', dept_raw),
-                    group_sum(rt_members, '存款', prev)),
-                "MT注册": pct_change(
-                    group_sum(mt_members, '注册', dept_raw),
-                    group_sum(mt_members, '注册', prev)),
-                "RT注册": pct_change(
-                    group_sum(rt_members, '注册', dept_raw),
-                    group_sum(rt_members, '注册', prev)),
+                "MT存款": pct_change(group_sum(mt_members, '存款', dept_raw), group_sum(mt_members, '存款', prev)),
+                "RT存款": pct_change(group_sum(rt_members, '存款', dept_raw), group_sum(rt_members, '存款', prev)),
+                "MT注册": pct_change(group_sum(mt_members, '注册', dept_raw), group_sum(mt_members, '注册', prev)),
+                "RT注册": pct_change(group_sum(rt_members, '注册', dept_raw), group_sum(rt_members, '注册', prev)),
                 "各部门存款": {
                     dept["label"]: pct_change(
                         parse_num((dept_raw.get(dept["label"]) or {}).get('存款', '0')),
@@ -439,28 +425,18 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
 
         if w7:
             payload["周同比（今日 vs 7天前）"] = {
-                "MT存款": pct_change(
-                    group_sum(mt_members, '存款', dept_raw),
-                    group_sum(mt_members, '存款', w7)),
-                "RT存款": pct_change(
-                    group_sum(rt_members, '存款', dept_raw),
-                    group_sum(rt_members, '存款', w7)),
-                "MT注册": pct_change(
-                    group_sum(mt_members, '注册', dept_raw),
-                    group_sum(mt_members, '注册', w7)),
+                "MT存款": pct_change(group_sum(mt_members, '存款', dept_raw), group_sum(mt_members, '存款', w7)),
+                "RT存款": pct_change(group_sum(rt_members, '存款', dept_raw), group_sum(rt_members, '存款', w7)),
+                "MT注册": pct_change(group_sum(mt_members, '注册', dept_raw), group_sum(mt_members, '注册', w7)),
             }
 
-        # 月累计对比（含今日）
         month_hist = history.get('本月历史累计', {})
         last_month = history.get('上月同期累计', {})
         days_count = history.get('本月天数', yesterday.day)
 
         if month_hist or last_month:
-            # 今月累计 = 历史累计 + 今日
             def month_total(field, group_members):
-                hist_sum = group_sum(group_members, field, month_hist)
-                today_sum = group_sum(group_members, field, dept_raw)
-                return hist_sum + today_sum
+                return group_sum(group_members, field, month_hist) + group_sum(group_members, field, dept_raw)
 
             def last_total(field, group_members):
                 return group_sum(group_members, field, last_month)
@@ -545,7 +521,7 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 async def main():
     yesterday = datetime.now(SHANGHAI) - timedelta(days=1)
 
-    # 1. 加载历史数据（今日之前）
+    # 1. 加载历史数据
     print(f"[History] 加载历史数据...")
     history = load_history(yesterday)
     has_history = bool(history.get('前日数据') or history.get('7天前数据'))
@@ -568,7 +544,7 @@ async def main():
     # 3. 保存今日数据到历史 Sheet
     save_to_history(yesterday, dept_raw)
 
-    # 4. 构建原始数据日报（备用）
+    # 4. 构建原始数据日报
     mt_summary = build_summary("MT汇总", ["QY", "TH", "LW", "QM", "RB"], dept_results)
     rt_summary = build_summary("RT汇总", ["UED", "JX", "TQ"], dept_results)
     date_label = f"{yesterday.month}月{yesterday.day}日"
@@ -591,18 +567,17 @@ async def main():
         except Exception as e:
             print(f"[AI Analysis Error] {e}")
 
-    # 6. 发送消息（AI 成功只发分析，失败才降级为原始数据）
+    # 6. 发送消息：先发原始数据，再发 AI 分析
+    await bot.send_message(chat_id=TG_CHAT_ID, text=raw_report)
     if ai_report:
         trend_note = "（含日/周/月趋势对比）" if has_history else "（历史数据积累中，趋势对比将在明日起生效）"
         ai_message = f"🤖 {date_label} COO 经营简报 {trend_note}\n\n{ai_report}"
         await bot.send_message(chat_id=TG_CHAT_ID, text=ai_message)
-    else:
-        await bot.send_message(chat_id=TG_CHAT_ID, text=raw_report)
-        if CLAUDE_API_KEY:
-            await bot.send_message(
-                chat_id=TG_CHAT_ID,
-                text="⚠️ AI 分析暂时不可用，已发送原始数据日报。"
-            )
+    elif CLAUDE_API_KEY:
+        await bot.send_message(
+            chat_id=TG_CHAT_ID,
+            text="⚠️ AI 分析暂时不可用，已发送原始数据日报。"
+        )
 
 if __name__ == "__main__":
     asyncio.run(main())
