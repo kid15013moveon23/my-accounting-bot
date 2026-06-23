@@ -20,4 +20,5 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
         run: python send_report.py
