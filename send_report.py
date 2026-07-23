@@ -5,7 +5,7 @@ GitHub Actions 每天 11:00 上海时间自动发送
 - Claude API 做 COO 级趋势分析
 - 失败时自动降级为原始数据日报
 """
-import os, json, re, asyncio
+import os, json, re, asyncio, time
 from datetime import datetime, timedelta
 import pytz
 import gspread
@@ -215,38 +215,46 @@ def pct_change(new: float, old: float) -> str:
     return f"{sign}{change:.1f}%"
 
 # ─── Fetch ────────────────────────────────────────────────────────────────────
-def fetch(dept, yesterday):
+def fetch(dept, yesterday, max_retries=3):
     label = dept["label"]
-    try:
-        ss       = client.open_by_key(dept["sheet_id"])
-        ws       = pick_worksheet(ss, dept["worksheet"])
-        all_data = ws.get_all_values()
-        if not all_data:
-            return f"【{label}】⚠️ 空表", None, None
+    for attempt in range(max_retries):
+        try:
+            ss       = client.open_by_key(dept["sheet_id"])
+            ws       = pick_worksheet(ss, dept["worksheet"])
+            all_data = ws.get_all_values()
+            if not all_data:
+                return f"【{label}】⚠️ 空表", None, None
 
-        row, date_str, exact = find_data_row(
-            all_data, dept["direction"], dept["date_col"], yesterday
-        )
-        if row is None:
-            return f"【{label}】⚠️ 无有效数据", None, None
+            row, date_str, exact = find_data_row(
+                all_data, dept["direction"], dept["date_col"], yesterday
+            )
+            if row is None:
+                return f"【{label}】⚠️ 无有效数据", None, None
 
-        ymd  = f"{yesterday.month}/{yesterday.day}"
-        note = "" if exact else f"⚠️数据截至{date_str} "
-        lines = [f"【{label}】{note}{ymd}"]
+            ymd  = f"{yesterday.month}/{yesterday.day}"
+            note = "" if exact else f"⚠️数据截至{date_str} "
+            lines = [f"【{label}】{note}{ymd}"]
 
-        data = {}
-        raw  = {}
-        for name, col in dept["columns"].items():
-            val = safe(row, col)
-            lines.append(f"  {name}: {val}")
-            if name in SUMMARY_FIELDS:
-                data[name] = parse_num(val)
-            raw[name] = val
+            data = {}
+            raw  = {}
+            for name, col in dept["columns"].items():
+                val = safe(row, col)
+                lines.append(f"  {name}: {val}")
+                if name in SUMMARY_FIELDS:
+                    data[name] = parse_num(val)
+                raw[name] = val
 
-        return "\n".join(lines), data, raw
+            return "\n".join(lines), data, raw
 
-    except Exception as e:
-        return f"【{label}】❌ {e}", None, None
+        except Exception as e:
+            err_str = str(e)
+            # 503 / 429 / 500 是临时错误，自动重试
+            if attempt < max_retries - 1 and any(code in err_str for code in ('503', '429', '500')):
+                wait = 15 * (2 ** attempt)   # 15s → 30s → 60s
+                print(f"[{label}] 临时错误，{wait}s 后重试 ({attempt+1}/{max_retries}): {e}")
+                time.sleep(wait)
+            else:
+                return f"【{label}】❌ {e}", None, None
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 def build_summary(label: str, members: list, results: dict) -> str:
@@ -515,19 +523,18 @@ def call_claude(payload: dict) -> str:
     data_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
     system_prompt = """你是一位在线娱乐／体育综合平台的 COO 数据分析助理。
-你每天收到八个部门（UED、RB、QM、QY、TQ、TH、LW、JX）的经营数据，以及历史对比数据。
-MT组ﺚQY、TH、LW、QM、RB；RT组ﺚUED、JX、TQ。
+你每天收到八个部门（UED、RB、QM、QY、RT、TH；RT；LW、JX）的经营漪据行，跳备原始数据。
+MT：QY、TH、LW、QM、RB；RT；UED㾿JX、TQ。
 
-分析规则：
-1. 综合看活跃、存款、存提差、首存转化率（首存/注册）。
-2. 首存转化率低于10%需提醒。
-3. 存提差为负或远低于存款，代表高提现压力或套利风险。
-4. 活跃上升但存提差未同步，可能是低价值流量或促销依赖。
-5. 日环比变化超过±20%需特别标注，并分析原因。
-6. 周同比下滑连续两周需预警。
-7. 月同比数据体现月度经营趋势，是判断整体走势的最重要指标。
-8. 如数据正常，输出正面总结，不强行找异常。
-9. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 700 字以内。"""
+分析积臰：
+1. 综合看活跃、存款、存提廮、首存转挖率击层（首存/注册）。
+2. 馘存转挖率低于10%需钱釒。
+3. 存提廮亓超趋与存款，代表宸接现压力意层。
+4. 活跳为优或远低于存款，代表高提现压力或套利风险。
+5. 日（性）经营漪据 ñ20%需特别标注，并分析原因。
+3. 周同比下滑连续两周需预警。
+4. 两假数据体现月度经营趋势，是判断整体走势的最重要指标。
+9. 语气经营简洁专业，适合 Telegram 昅诿，见局因好本跿会对其。"""
 
     user_prompt = f"""以下是今日经营数据与历史对比（JSON 格式）：
 
@@ -547,7 +554,7 @@ MT组ﺚQY、TH、LW、QM、RB；RT组ﺚUED、JX、TQ。
 （最多3条，格式：▶ [部门] 异常指标 → 可能原因 → 建议）
 
 【需要跟进事项】
-（3-5 条可执行建议，直接给运营主管执行）
+（3-5 条可执行建议，直接给(��营主管执行）
 
 【一句话结论】
 （COO 最需要关注的一件事）"""
@@ -634,6 +641,11 @@ async def main():
         await bot.send_message(
             chat_id=TG_CHAT_ID,
             text="⚠️ AI 分析暂时不可用，已发送原始数据日报。"
+        )
+
+if __name__ == "__main__":
+    asyncio.run(main())
+��用，已发送原始数据日报。"
         )
 
 if __name__ == "__main__":
