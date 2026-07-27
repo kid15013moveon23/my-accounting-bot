@@ -450,7 +450,7 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
             }
             payload["日环比（今日 vs 前日）"] = {
                 "MT存款": pct_change(
-                    group_sum(mt_members, '存款', dept_raw),
+                    group_sum(mt_members, '存款', d5pt_raw),
                     group_sum(mt_members, '存款', prev)),
                 "RT存款": pct_change(
                     group_sum(rt_members, '存款', dept_raw),
@@ -523,18 +523,19 @@ def call_claude(payload: dict) -> str:
     data_json = json.dumps(payload, ensure_ascii=False, indent=2)
 
     system_prompt = """你是一位在线娱乐／体育综合平台的 COO 数据分析助理。
-你每天收到八个部门（UED、RB、QM、QY、RT、TH；RT；LW、JX）的经营漪据行，跳备原始数据。
-MT：QY、TH、LW、QM、RB；RT；UED㾿JX、TQ。
+你每天收到八个部门（UED、RB、QM、QY、TQ、TH、LW、JX）的经营数据，以及历史对比数据。
+MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 
-分析积臰：
-1. 综合看活跃、存款、存提廮、首存转挖率击层（首存/注册）。
-2. 馘存转挖率低于10%需钱釒。
-3. 存提廮亓超趋与存款，代表宸接现压力意层。
-4. 活跳为优或远低于存款，代表高提现压力或套利风险。
-5. 日（性）经营漪据 ñ20%需特别标注，并分析原因。
-3. 周同比下滑连续两周需预警。
-4. 两假数据体现月度经营趋势，是判断整体走势的最重要指标。
-9. 语气经营简洁专业，适合 Telegram 昅诿，见局因好本跿会对其。"""
+分析规则：
+1. 综合看活跃、存款、存提差、首存转化率（首存/注册）。
+2. 首存转化率低于10%需提醒。
+3. 存提差为负或远低于存款，代表高提现压力或套利风险。
+4. 活跃上升但存提差未同步，可能是低价值流量或促销依赖。
+5. 日环比变化超过±20%需特别标注，并分析原因。
+6. 周同比下滑连续两周需预警。
+7. 月同比数据体现月度经营趋势，是判断整体走势的最重要指标。
+8. 如数据正常，输出正面总结，不强行找异常。
+9. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 700 字以内。"""
 
     user_prompt = f"""以下是今日经营数据与历史对比（JSON 格式）：
 
@@ -554,7 +555,7 @@ MT：QY、TH、LW、QM、RB；RT；UED㾿JX、TQ。
 （最多3条，格式：▶ [部门] 异常指标 → 可能原因 → 建议）
 
 【需要跟进事项】
-（3-5 条可执行建议，直接给(��营主管执行）
+（3-5 条可执行建议，直接给运营主管执行）
 
 【一句话结论】
 （COO 最需要关注的一件事）"""
@@ -628,7 +629,7 @@ async def main():
         try:
             payload   = build_analysis_payload(yesterday, dept_raw, history)
             ai_report = call_claude(payload)
-        except Exception as e:
+        except Exception ac e:
             print(f"[AI Analysis Error] {e}")
 
     # 6. 发送消息（先发原始数据，再发 AI 分析）
@@ -641,11 +642,6 @@ async def main():
         await bot.send_message(
             chat_id=TG_CHAT_ID,
             text="⚠️ AI 分析暂时不可用，已发送原始数据日报。"
-        )
-
-if __name__ == "__main__":
-    asyncio.run(main())
-��用，已发送原始数据日报。"
         )
 
 if __name__ == "__main__":
