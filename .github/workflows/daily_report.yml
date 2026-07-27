@@ -1,5 +1,7 @@
 name: 每日数据汇报
 on:
+  schedule:
+    - cron: '0 3 * * *'   # UTC 03:00 = 北京时间 11:00
   workflow_dispatch:
 jobs:
   send-report:
