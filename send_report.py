@@ -450,7 +450,7 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
             }
             payload["日环比（今日 vs 前日）"] = {
                 "MT存款": pct_change(
-                    group_sum(mt_members, '存款', d5pt_raw),
+                    group_sum(mt_members, '存款', dept_raw),
                     group_sum(mt_members, '存款', prev)),
                 "RT存款": pct_change(
                     group_sum(rt_members, '存款', dept_raw),
@@ -629,7 +629,7 @@ async def main():
         try:
             payload   = build_analysis_payload(yesterday, dept_raw, history)
             ai_report = call_claude(payload)
-        except Exception ac e:
+        except Exception as e:
             print(f"[AI Analysis Error] {e}")
 
     # 6. 发送消息（先发原始数据，再发 AI 分析）
