@@ -276,8 +276,8 @@ def build_summary(label: str, members: list, results: dict) -> str:
     return "\n".join(lines)
 
 # ─── Monthly Summary ──────────────────────────────────────────────────────────
-def build_monthly_summary(label: str, members: list, results: dict, month_hist: dict) -> str:
-    """结合历史月累计 + 今日数据，生成本月汇总"""
+def build_monthly_summary(label: str, members: list, results: dict, month_hist: dict, days_count: int = 1) -> str:
+    """结合历史月累计 + 今日数据，生成本月汇总（含日均）"""
     totals  = {f: 0.0 for f in SUMMARY_FIELDS}
     missing = []
     for m in members:
@@ -291,9 +291,10 @@ def build_monthly_summary(label: str, members: list, results: dict, month_hist: 
         for f in SUMMARY_FIELDS:
             totals[f] += parse_num(hist.get(f, '0'))
 
+    days = days_count if days_count and days_count > 0 else 1
     lines = [f"【{label}】({'、'.join(members)})"]
     for f in SUMMARY_FIELDS:
-        lines.append(f"  {f}: {fmt_num(totals[f])}")
+        lines.append(f"  {f}: {fmt_num(totals[f])}（日均 {fmt_num(totals[f] / days)}）")
     if missing:
         lines.append(f"  ⚠️ 缺失: {' '.join(missing)}")
     return "\n".join(lines)
@@ -502,6 +503,18 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
                 "MT": {f: fmt_num(month_total(f, mt_members)) for f in SUMMARY_FIELDS},
                 "RT": {f: fmt_num(month_total(f, rt_members)) for f in SUMMARY_FIELDS},
             }
+            def daily_avg(field, group_members):
+                return month_total(field, group_members) / max(days_count, 1)
+
+            payload["本月日均"] = {
+                "说明": f"本月累计 ÷ {days_count} 天",
+                "MT": {f: fmt_num(daily_avg(f, mt_members)) for f in SUMMARY_FIELDS},
+                "RT": {f: fmt_num(daily_avg(f, rt_members)) for f in SUMMARY_FIELDS},
+            }
+            payload["日均环比（今日 vs 本月日均）"] = {
+                "MT": {f: pct_change(group_sum(mt_members, f, dept_raw), daily_avg(f, mt_members)) for f in SUMMARY_FIELDS},
+                "RT": {f: pct_change(group_sum(rt_members, f, dept_raw), daily_avg(f, rt_members)) for f in SUMMARY_FIELDS},
+            }
             if last_month:
                 payload["上月同期累计"] = {
                     "MT": {f: fmt_num(last_total(f, mt_members)) for f in SUMMARY_FIELDS},
@@ -534,8 +547,9 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 5. 日环比变化超过±20%需特别标注，并分析原因。
 6. 周同比下滑连续两周需预警。
 7. 月同比数据体现月度经营趋势，是判断整体走势的最重要指标。
-8. 如数据正常，输出正面总结，不强行找异常。
-9. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 700 字以内。"""
+8. 日均环比（今日 vs 本月日均）是衡量今日表现的基准线：高于日均说明今日好于本月平均水平，低于则相反；偏离超过±15%需重点说明原因。
+9. 如数据正常，输出正面总结，不强行找异常。
+10. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 700 字以内。"""
 
     user_prompt = f"""以下是今日经营数据与历史对比（JSON 格式）：
 
@@ -548,6 +562,7 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 
 【趋势对比速览】
 日环比：（MT/RT 存款、注册的日变化，标注显著变化部门）
+日均环比：（今日 vs 本月日均，判断今日处于本月什么水平）
 周同比：（本日 vs 7天前，整体走势判断）
 月累计：（本月 vs 上月同期，月度进展评估）
 
@@ -608,8 +623,8 @@ async def main():
     # 本月累计汇总（历史月累计 + 今日）
     month_hist  = history.get('本月历史累计', {})
     days_count  = history.get('本月天数', yesterday.day)
-    mt_month    = build_monthly_summary("MT本月汇总", ["QY", "TH", "LW", "QM", "RB"], dept_results, month_hist)
-    rt_month    = build_monthly_summary("RT本月汇总", ["UED", "JX", "TQ"], dept_results, month_hist)
+    mt_month    = build_monthly_summary("MT本月汇总", ["QY", "TH", "LW", "QM", "RB"], dept_results, month_hist, days_count)
+    rt_month    = build_monthly_summary("RT本月汇总", ["UED", "JX", "TQ"], dept_results, month_hist, days_count)
 
     raw_report = (
         f"📊 {date_label} 各部门原始数据\n\n"
