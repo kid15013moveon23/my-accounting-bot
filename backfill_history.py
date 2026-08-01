@@ -11,8 +11,8 @@ from google.oauth2.service_account import Credentials
 SA_JSON          = json.loads(os.environ['GSHEET_SA_JSON'])
 HISTORY_SHEET_ID = os.environ['HISTORY_SHEET_ID']
 
-START_DATE = datetime(2026, 5, 1)
-END_DATE   = datetime(2026, 6, 22)
+START_DATE = datetime(2026, 7, 23)
+END_DATE   = datetime(2026, 7, 25)
 
 SHANGHAI = pytz.timezone('Asia/Shanghai')
 SCOPES   = ['https://www.googleapis.com/auth/spreadsheets']
@@ -21,8 +21,8 @@ client   = gspread.authorize(creds)
 
 DEPARTMENTS = [
     {"label":"UED","group":"RT","sheet_id":"1a7ZBESgUweasFGf2FfDx1TbMvb1onS-knTU7cx2I13g","worksheet":"每日明细","date_col":0,"direction":"top","columns":{"注册":25,"首存":26,"存款":3,"提款":4,"存提差":5,"活跃":18}},
-    {"label":"RB","group":"MT","sheet_id":"1iErwKLMSsPEcnYravOzhMGuTiZBBUYedggr84UU8Ilo","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12}},
-    {"label":"QM","group":"MT","sheet_id":"1drz_NT2aTiPHfvX-xOmJR72q-o9Mk9hucPGTfTfFLmI","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12}},
+    {"label":"RB","group":"MT","sheet_id":"1iErwKLMSsPEcnYravOzhMGuTiZBBUYedggr84UU8Ilo","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
+    {"label":"QM","group":"MT","sheet_id":"1drz_NT2aTiPHfvX-xOmJR72q-o9Mk9hucPGTfTfFLmI","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
     {"label":"QY","group":"MT","sheet_id":"1NMOTloCNN7lDpa2Wjtehcdx75UU7Rx7HAepXYv5SgB0","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":3,"存款":9,"提款":12,"存提差":13,"活跃":10}},
     {"label":"TQ","group":"RT","sheet_id":"1RbcFCX8a-vUwsRKcu2ONzu_IBx0gyUw4Kds7HXwfUNM","worksheet":"每日明细","date_col":0,"direction":"top","columns":{"注册":24,"首存":25,"存款":3,"提款":4,"存提差":5,"活跃":18}},
     {"label":"TH","group":"MT","sheet_id":"1JKgkLj_ltl5wwhB7u4Uy8DBgznKpys75kGdJZF9LBuQ","worksheet":"每日基础数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
