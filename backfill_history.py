@@ -11,8 +11,22 @@ from google.oauth2.service_account import Credentials
 SA_JSON          = json.loads(os.environ['GSHEET_SA_JSON'])
 HISTORY_SHEET_ID = os.environ['HISTORY_SHEET_ID']
 
-START_DATE = datetime(2026, 7, 23)
-END_DATE   = datetime(2026, 7, 25)
+def _parse_date(s, fallback):
+    s = (s or '').strip()
+    if not s:
+        return fallback
+    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d'):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            pass
+    raise SystemExit(f"❌ 日期格式错误: {s!r}（正确格式如 2026-07-23）")
+
+# 日期由工作流输入决定；留空则用下面的默认值
+START_DATE = _parse_date(os.environ.get('BACKFILL_START'), datetime(2026, 7, 23))
+END_DATE   = _parse_date(os.environ.get('BACKFILL_END'), START_DATE)
+if END_DATE < START_DATE:
+    raise SystemExit(f"❌ 结束日期 {END_DATE.date()} 早于开始日期 {START_DATE.date()}")
 
 SHANGHAI = pytz.timezone('Asia/Shanghai')
 SCOPES   = ['https://www.googleapis.com/auth/spreadsheets']
@@ -100,17 +114,18 @@ def main():
         time.sleep(1)
 
     print()
+    target_dates = []
     current = START_DATE
-    saved = skipped = no_data = 0
-
     while current <= END_DATE:
-        date_str = current.strftime('%Y-%m-%d')
+        target_dates.append(current)
+        current += timedelta(days=1)
 
-        if date_str in existing_dates:
-            print(f"⏭  {date_str} 已存在")
-            skipped += 1
-            current += timedelta(days=1)
-            continue
+    fresh_rows      = []     # 本次重新抓到的数据
+    dates_with_data = set()  # 抓到数据的日期（这些日期的旧记录将被覆盖）
+    no_data         = 0
+
+    for current in target_dates:
+        date_str = current.strftime('%Y-%m-%d')
 
         rows = []
         for dept in DEPARTMENTS:
@@ -124,21 +139,34 @@ def main():
                     raw.get('提款',''), raw.get('存提差',''), raw.get('活跃','')])
 
         if rows:
-            try:
-                hist_ws.append_rows(rows, value_input_option='USER_ENTERED')
-                print(f"✅ {date_str} → {len(rows)} 部门")
-                saved += 1
-                time.sleep(2)
-            except Exception as e:
-                print(f"❌ {date_str} 写入失败: {e}")
-                time.sleep(5)
+            old_n = sum(1 for r in all_hist[1:] if r and r[0] == date_str)
+            tag = f"覆盖原有 {old_n} 行" if old_n else "新增"
+            print(f"✅ {date_str} → {len(rows)} 部门（{tag}）")
+            fresh_rows.extend(rows)
+            dates_with_data.add(date_str)
         else:
-            print(f"—  {date_str} 无数据")
+            print(f"—  {date_str} 源表查无数据，保留原有记录")
             no_data += 1
 
-        current += timedelta(days=1)
+    if not fresh_rows:
+        print("\n=== 未抓到任何数据，历史表保持不变 ===")
+        return
 
-    print(f"\n=== 完成：写入{saved}天，跳过{skipped}天，无数据{no_data}天 ===")
+    # 重建整张表：剔除被覆盖日期的旧行，再接上新抓到的行
+    header = all_hist[0]
+    kept   = [r for r in all_hist[1:] if r and r[0] and r[0] not in dates_with_data]
+    new_values = [header] + kept + fresh_rows
+
+    # 安全阀：行数异常就中止，绝不把历史表写坏
+    if len(new_values) < 1 + len(fresh_rows):
+        raise SystemExit("❌ 重建后行数异常，已中止，历史表未改动")
+
+    hist_ws.update(range_name='A1', values=new_values, value_input_option='USER_ENTERED')
+    if len(all_hist) > len(new_values):
+        hist_ws.batch_clear([f"A{len(new_values)+1}:I{len(all_hist)}"])
+
+    print(f"\n=== 完成：重写 {len(dates_with_data)} 天 / {len(fresh_rows)} 行，"
+          f"源表无数据 {no_data} 天，历史表现共 {len(new_values)-1} 行 ===")
 
 if __name__ == "__main__":
     main()
