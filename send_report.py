@@ -137,6 +137,9 @@ DEPARTMENTS = [
 SUMMARY_FIELDS = ["注册", "首存", "存款", "提款", "存提差"]
 HISTORY_FIELDS = ["注册", "首存", "存款", "提款", "存提差", "活跃"]
 
+# 日报显示名（内部字段名保持不变，仅影响输出文字）
+DISPLAY_NAMES  = {"活跃": "活跃人数"}
+
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 def is_summary(val: str) -> bool:
     v = val.strip()
@@ -240,7 +243,7 @@ def fetch(dept, yesterday, max_retries=3):
             raw  = {}
             for name, col in dept["columns"].items():
                 val = safe(row, col)
-                lines.append(f"  {name}: {val}")
+                lines.append(f"  {DISPLAY_NAMES.get(name, name)}: {val}")
                 if name in SUMMARY_FIELDS:
                     data[name] = parse_num(val)
                 raw[name] = val
