@@ -34,7 +34,7 @@ creds    = Credentials.from_service_account_info(SA_JSON, scopes=SCOPES)
 client   = gspread.authorize(creds)
 
 DEPARTMENTS = [
-    {"label":"UED","group":"RT","sheet_id":"1a7ZBESgUweasFGf2FfDx1TbMvb1onS-knTU7cx2I13g","worksheet":"每日明细","date_col":0,"direction":"top","columns":{"注册":25,"首存":26,"存款":3,"提款":4,"存提差":5,"活跃":18}},
+    {"label":"UED","group":"RT","sheet_id":"1a7ZBESgUweasFGf2FfDx1TbMvb1onS-knTU7cx2I13g","worksheet":"每日明细","date_col":0,"direction":"top","date_no_year":True,"columns":{"注册":25,"首存":26,"存款":3,"提款":4,"存提差":5,"活跃":18}},
     {"label":"RB","group":"MT","sheet_id":"1iErwKLMSsPEcnYravOzhMGuTiZBBUYedggr84UU8Ilo","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
     {"label":"QM","group":"MT","sheet_id":"1drz_NT2aTiPHfvX-xOmJR72q-o9Mk9hucPGTfTfFLmI","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
     {"label":"QY","group":"MT","sheet_id":"1NMOTloCNN7lDpa2Wjtehcdx75UU7Rx7HAepXYv5SgB0","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":3,"存款":9,"提款":12,"存提差":13,"活跃":10}},
@@ -72,8 +72,49 @@ def safe(row, col):
     except IndexError:
         return "—"
 
-def find_exact_row(all_data, direction, date_col, target_date):
+def serial_to_date(v):
+    """Google Sheets 日期序列号 → date；非日期返回 None"""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return (datetime(1899, 12, 30) + timedelta(days=int(n))).date()
+
+def load_real_dates(ws, date_col, n_rows):
+    """读取日期列未格式化的原始值，得到带年份的真实日期 {行索引: date}"""
+    try:
+        letter = chr(ord('A') + date_col)
+        raw = ws.get(f"{letter}1:{letter}{n_rows}",
+                     value_render_option='UNFORMATTED_VALUE')
+        out = {}
+        for i, cell in enumerate(raw):
+            d = serial_to_date(cell[0] if cell else None)
+            if d:
+                out[i] = d
+        return out or None
+    except Exception as e:
+        print(f"  [RealDate] 原始日期读取失败，回退文本匹配: {e}")
+        return None
+
+def find_exact_row(all_data, direction, date_col, target_date, real_dates=None):
     variants = date_variants(target_date)
+
+    # 有带年份的真实日期时：精确比对，匹配不到即返回 None，绝不误取其他年份
+    if real_dates:
+        target = target_date.date() if hasattr(target_date, 'date') else target_date
+        idxs = list(range(1, len(all_data)))
+        if direction == "bottom":
+            idxs.reverse()
+        for i in idxs:
+            row = all_data[i]
+            if len(row) <= date_col: continue
+            if is_summary(row[date_col].strip()): continue
+            if real_dates.get(i) == target:
+                return row
+        return None
+
     data_rows = all_data[1:]
     ordered = list(reversed(data_rows)) if direction == "bottom" else data_rows
     for row in ordered:
@@ -102,11 +143,15 @@ def main():
 
     print("📥 预加载各部门数据...")
     dept_all_data = {}
+    dept_real_dates = {}
     for dept in DEPARTMENTS:
         try:
             ss = client.open_by_key(dept["sheet_id"])
             ws = pick_worksheet(ss, dept["worksheet"])
             dept_all_data[dept["label"]] = ws.get_all_values()
+            if dept.get("date_no_year"):
+                dept_real_dates[dept["label"]] = load_real_dates(
+                    ws, dept["date_col"], len(dept_all_data[dept["label"]]))
             print(f"  ✅ {dept['label']} ({len(dept_all_data[dept['label']])} 行)")
         except Exception as e:
             dept_all_data[dept["label"]] = []
@@ -131,7 +176,8 @@ def main():
         for dept in DEPARTMENTS:
             all_data = dept_all_data.get(dept["label"], [])
             if not all_data: continue
-            row = find_exact_row(all_data, dept["direction"], dept["date_col"], current)
+            row = find_exact_row(all_data, dept["direction"], dept["date_col"], current,
+                                 dept_real_dates.get(dept["label"]))
             if row:
                 raw = {name: safe(row, col) for name, col in dept["columns"].items()}
                 rows.append([date_str, dept['label'], dept['group'],
