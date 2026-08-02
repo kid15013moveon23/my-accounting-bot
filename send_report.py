@@ -35,6 +35,7 @@ DEPARTMENTS = [
         "worksheet": "每日明细",
         "date_col":  0,
         "direction": "top",
+        "date_no_year": True,   # 日期只显示「8/1」不含年份，且按月倒序堆叠，须用原始日期比对
         "columns": {
             "注册": 25, "首存": 26,
             "存款": 3,  "提款": 4, "存提差": 5,
@@ -166,7 +167,33 @@ def pick_worksheet(ss, ws_hint: str):
             return w
     return ss.worksheets()[0]
 
-def find_data_row(all_data, direction, date_col, target_date):
+def serial_to_date(v):
+    """Google Sheets 日期序列号 → date；非日期返回 None"""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return (datetime(1899, 12, 30) + timedelta(days=int(n))).date()
+
+def load_real_dates(ws, date_col, n_rows):
+    """读取日期列的未格式化原始值，得到带年份的真实日期 {行索引: date}"""
+    try:
+        letter = chr(ord('A') + date_col)
+        raw = ws.get(f"{letter}1:{letter}{n_rows}",
+                     value_render_option='UNFORMATTED_VALUE')
+        out = {}
+        for i, cell in enumerate(raw):
+            d = serial_to_date(cell[0] if cell else None)
+            if d:
+                out[i] = d
+        return out or None
+    except Exception as e:
+        print(f"[RealDate] 原始日期读取失败，回退文本匹配: {e}")
+        return None
+
+def find_data_row(all_data, direction, date_col, target_date, real_dates=None):
     variants  = date_variants(target_date)
     data_rows = all_data[1:]
     ordered   = list(reversed(data_rows)) if direction == "bottom" else data_rows
@@ -174,6 +201,20 @@ def find_data_row(all_data, direction, date_col, target_date):
     def valid(row):
         if len(row) <= date_col: return False
         return not is_summary(row[date_col].strip())
+
+    # 有带年份的真实日期时：精确比对年月日，避免跨年误匹配
+    # 匹配不到宁可返回无数据，也不静默取到别的年份
+    if real_dates:
+        target = target_date.date() if hasattr(target_date, 'date') else target_date
+        idxs = list(range(1, len(all_data)))
+        if direction == "bottom":
+            idxs.reverse()
+        for i in idxs:
+            row = all_data[i]
+            if not valid(row): continue
+            if real_dates.get(i) == target:
+                return row, row[date_col].strip(), True
+        return None, None, False
 
     for row in ordered:
         if not valid(row): continue
@@ -229,8 +270,12 @@ def fetch(dept, yesterday, max_retries=3):
             if not all_data:
                 return f"【{label}】⚠️ 空表", None, None
 
+            real_dates = None
+            if dept.get("date_no_year"):
+                real_dates = load_real_dates(ws, dept["date_col"], len(all_data))
+
             row, date_str, exact = find_data_row(
-                all_data, dept["direction"], dept["date_col"], yesterday
+                all_data, dept["direction"], dept["date_col"], yesterday, real_dates
             )
             if row is None:
                 return f"【{label}】⚠️ 无有效数据", None, None
