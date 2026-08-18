@@ -21,6 +21,10 @@ CLAUDE_API_KEY   = os.environ.get('CLAUDE_API_KEY', '')
 CLAUDE_MODEL     = os.environ.get('CLAUDE_MODEL', 'claude-haiku-4-5-20251001')
 HISTORY_SHEET_ID = os.environ.get('HISTORY_SHEET_ID', '')
 
+# 单平台更新模式：只抓一个部门、只更新历史表该行、不跑 AI
+ONLY_DEPT        = os.environ.get('ONLY_DEPT', '').strip().upper()
+ONLY_DATE        = os.environ.get('ONLY_DATE', '').strip()
+
 SHANGHAI = pytz.timezone('Asia/Shanghai')
 SCOPES   = ['https://www.googleapis.com/auth/spreadsheets']   # 需要写权限
 creds    = Credentials.from_service_account_info(SA_JSON, scopes=SCOPES)
@@ -386,6 +390,31 @@ def save_to_history(yesterday: datetime, dept_raw: dict):
     except Exception as e:
         print(f"[History Save Error] {e}")
 
+def save_one_dept(target: datetime, dept: dict, raw: dict) -> str:
+    """只覆盖历史表中 (日期, 部门) 这一行，不动其他部门"""
+    if not HISTORY_SHEET_ID:
+        return "未设置 HISTORY_SHEET_ID，跳过"
+    try:
+        ws       = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
+        all_hist = ws.get_all_values()
+        date_str = target.strftime('%Y-%m-%d')
+        raw      = raw or {}
+        new_row  = [date_str, dept['label'], dept['group'],
+                    raw.get('注册', ''), raw.get('首存', ''), raw.get('存款', ''),
+                    raw.get('提款', ''), raw.get('存提差', ''), raw.get('活跃', '')]
+
+        for i in range(1, len(all_hist)):
+            r = all_hist[i]
+            if len(r) >= 2 and r[0] == date_str and r[1] == dept['label']:
+                ws.update(range_name=f'A{i+1}:I{i+1}', values=[new_row],
+                          value_input_option='USER_ENTERED')
+                return f"已覆盖历史表第 {i+1} 行"
+
+        ws.append_row(new_row, value_input_option='USER_ENTERED')
+        return "历史表原无该记录，已新增"
+    except Exception as e:
+        return f"历史表写入失败: {e}"
+
 # ─── History: Load & Compare ──────────────────────────────────────────────────
 def load_history(yesterday: datetime) -> dict:
     """读取历史数据，返回对比所需结构（不含今日）"""
@@ -640,6 +669,33 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def main():
     yesterday = datetime.now(SHANGHAI) - timedelta(days=1)
+
+    # ── 单平台更新模式：只抓一个部门，不做汇总与 AI 分析 ──
+    if ONLY_DEPT:
+        if ONLY_DATE:
+            try:
+                yesterday = SHANGHAI.localize(datetime.strptime(ONLY_DATE, '%Y-%m-%d'))
+            except ValueError:
+                print(f"[单平台] 日期格式错误: {ONLY_DATE}")
+                raise SystemExit(1)
+
+        dept = next((d for d in DEPARTMENTS if d["label"].upper() == ONLY_DEPT), None)
+        if not dept:
+            names = " / ".join(d["label"] for d in DEPARTMENTS)
+            print(f"[单平台] 未知平台 {ONLY_DEPT}，可用：{names}")
+            raise SystemExit(1)
+
+        date_label = f"{yesterday.month}月{yesterday.day}日"
+        text, data, raw = fetch(dept, yesterday)
+        note = save_one_dept(yesterday, dept, raw)
+        print(f"[单平台] {dept['label']} {date_label} → {note}")
+
+        bot = telegram.Bot(token=TG_TOKEN)
+        await bot.send_message(
+            chat_id=TG_CHAT_ID,
+            text=f"🔄 {date_label} {dept['label']} 数据已重新抓取\n\n{text}"
+        )
+        return
 
     # 1. 加载历史数据（今日之前）
     print(f"[History] 加载历史数据...")
