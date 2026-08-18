@@ -1,0 +1,44 @@
+name: 单平台更新（手动触发）
+
+on:
+  workflow_dispatch:
+    inputs:
+      dept:
+        description: '平台代号'
+        required: true
+        type: choice
+        options:
+          - UED
+          - RB
+          - QM
+          - QY
+          - TQ
+          - TH
+          - LW
+          - JX
+      date:
+        description: '日期，格式 2026-08-10（留空 = 昨天）'
+        required: false
+        default: ''
+
+jobs:
+  update-dept:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install gspread google-auth python-telegram-bot==21.6 pytz
+      - name: 更新单一平台
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
+          HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
+          ONLY_DEPT: ${{ inputs.dept }}
+          ONLY_DATE: ${{ inputs.date }}
+        run: python send_report.py
