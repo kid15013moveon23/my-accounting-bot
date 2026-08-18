@@ -415,6 +415,52 @@ def save_one_dept(target: datetime, dept: dict, raw: dict) -> str:
     except Exception as e:
         return f"历史表写入失败: {e}"
 
+def history_snapshot(target: datetime) -> dict:
+    """从历史表读回：目标日各部门数据 + 本月1日~目标日累计（含目标日）"""
+    out = {'day': {}, 'month': {}, 'days': 0}
+    if not HISTORY_SHEET_ID:
+        return out
+    try:
+        ws    = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
+        rows  = ws.get_all_values()[1:]
+        d_str = target.strftime('%Y-%m-%d')
+        m_str = target.replace(day=1).strftime('%Y-%m-%d')
+        dates = set()
+        for r in rows:
+            if len(r) < 8 or not r[0]:
+                continue
+            date_s, label = r[0].strip(), r[1].strip()
+            if not label:
+                continue
+            vals = {'注册': r[3], '首存': r[4], '存款': r[5], '提款': r[6], '存提差': r[7]}
+            if date_s == d_str:
+                out['day'][label] = {f: parse_num(vals[f]) for f in SUMMARY_FIELDS}
+            if m_str <= date_s <= d_str:
+                dates.add(date_s)
+                acc = out['month'].setdefault(label, {f: 0.0 for f in SUMMARY_FIELDS})
+                for f in SUMMARY_FIELDS:
+                    acc[f] += parse_num(vals[f])
+        out['days'] = len(dates)
+        return out
+    except Exception as e:
+        print(f"[Snapshot] 历史表读取失败: {e}")
+        return out
+
+def group_block(title: str, members: list, per_dept: dict, days: int = 0) -> str:
+    """按组汇总；days>0 时附带日均"""
+    totals = {f: 0.0 for f in SUMMARY_FIELDS}
+    for m in members:
+        d = per_dept.get(m) or {}
+        for f in SUMMARY_FIELDS:
+            totals[f] += d.get(f, 0.0)
+    lines = [f"【{title}】({'、'.join(members)})"]
+    for f in SUMMARY_FIELDS:
+        if days > 0:
+            lines.append(f"  {f}: {fmt_num(totals[f])}（日均 {fmt_num(totals[f] / days)}）")
+        else:
+            lines.append(f"  {f}: {fmt_num(totals[f])}")
+    return "\n".join(lines)
+
 # ─── History: Load & Compare ──────────────────────────────────────────────────
 def load_history(yesterday: datetime) -> dict:
     """读取历史数据，返回对比所需结构（不含今日）"""
@@ -690,11 +736,23 @@ async def main():
         note = save_one_dept(yesterday, dept, raw)
         print(f"[单平台] {dept['label']} {date_label} → {note}")
 
+        MT = ["QY", "TH", "LW", "QM", "RB"]
+        RT = ["UED", "JX", "TQ"]
+        snap  = history_snapshot(yesterday)
+        parts = [f"🔄 {date_label} {dept['label']} 数据已重新抓取", "", text]
+
+        if snap['day']:
+            parts += ["", "─" * 20, "",
+                      group_block("MT汇总", MT, snap['day']), "",
+                      group_block("RT汇总", RT, snap['day'])]
+        if snap['month']:
+            parts += ["", "─" * 20, "",
+                      f"📅 本月累计（1日－{yesterday.day}日，共{snap['days']}天）", "",
+                      group_block("MT本月汇总", MT, snap['month'], snap['days']), "",
+                      group_block("RT本月汇总", RT, snap['month'], snap['days'])]
+
         bot = telegram.Bot(token=TG_TOKEN)
-        await bot.send_message(
-            chat_id=TG_CHAT_ID,
-            text=f"🔄 {date_label} {dept['label']} 数据已重新抓取\n\n{text}"
-        )
+        await bot.send_message(chat_id=TG_CHAT_ID, text="\n".join(parts))
         return
 
     # 1. 加载历史数据（今日之前）
