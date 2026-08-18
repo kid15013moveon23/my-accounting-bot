@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: 安装依赖
-        run: pip install gspread google-auth python-telegram-bot==21.6 pytz
+        run: pip install gspread google-auth python-telegram-bot==21.6 pytz anthropic
       - name: 更新单一平台
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
