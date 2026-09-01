@@ -25,6 +25,9 @@ HISTORY_SHEET_ID = os.environ.get('HISTORY_SHEET_ID', '')
 ONLY_DEPT        = os.environ.get('ONLY_DEPT', '').strip().upper()
 ONLY_DATE        = os.environ.get('ONLY_DATE', '').strip()
 
+# 月度对比模式：'YYYY-MM' 指定要总结的月份；留空则在「昨天=1号」时自动启用
+MONTHLY_REVIEW   = os.environ.get('MONTHLY_REVIEW', '').strip()
+
 SHANGHAI = pytz.timezone('Asia/Shanghai')
 SCOPES   = ['https://www.googleapis.com/auth/spreadsheets']   # 需要写权限
 creds    = Credentials.from_service_account_info(SA_JSON, scopes=SCOPES)
@@ -446,6 +449,47 @@ def history_snapshot(target: datetime) -> dict:
         print(f"[Snapshot] 历史表读取失败: {e}")
         return out
 
+def month_bounds(ym: str):
+    """'2026-08' → (2026-08-01, 2026-08-31)"""
+    y, m  = map(int, ym.split('-'))
+    first = datetime(y, m, 1)
+    nxt   = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1)
+    return first, nxt - timedelta(days=1)
+
+def prev_month(ym: str) -> str:
+    y, m = map(int, ym.split('-'))
+    return f"{y-1}-12" if m == 1 else f"{y}-{m-1:02d}"
+
+def history_range_totals(start: datetime, end: datetime) -> dict:
+    """历史表中 [start, end] 区间各部门累计与实际天数"""
+    out = {'dept': {}, 'days': 0}
+    if not HISTORY_SHEET_ID:
+        return out
+    try:
+        ws   = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
+        rows = ws.get_all_values()[1:]
+        s, e = start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+        dates = set()
+        for r in rows:
+            if len(r) < 8 or not r[0]:
+                continue
+            ds, label = r[0].strip(), r[1].strip()
+            if not label or not (s <= ds <= e):
+                continue
+            dates.add(ds)
+            acc  = out['dept'].setdefault(label, {f: 0.0 for f in SUMMARY_FIELDS})
+            vals = {'注册': r[3], '首存': r[4], '存款': r[5], '提款': r[6], '存提差': r[7]}
+            for f in SUMMARY_FIELDS:
+                acc[f] += parse_num(vals[f])
+        out['days'] = len(dates)
+        return out
+    except Exception as e:
+        print(f"[RangeTotals] 历史表读取失败: {e}")
+        return out
+
+def group_sum_of(members: list, per_dept: dict, field: str) -> float:
+    return sum((per_dept.get(m) or {}).get(field, 0.0) for m in members)
+
 def group_block(title: str, members: list, per_dept: dict, days: int = 0) -> str:
     """按组汇总；days>0 时附带日均"""
     totals = {f: 0.0 for f in SUMMARY_FIELDS}
@@ -712,6 +756,116 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
         print(f"[Claude API Error] {e}")
         return ""
 
+def call_claude_month(payload: dict) -> str:
+    if not CLAUDE_API_KEY:
+        return ""
+    data_json = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    system_prompt = """你是一位在线娱乐／体育综合平台的 COO 数据分析助理，现在做的是**月度经营复盘**，不是日报。
+八个部门：MT组 QY、TH、LW、QM、RB；RT组 UED、JX、TQ。
+
+分析要求：
+1. 以「上月 vs 上上月」的整月数据做对比，关注月度趋势而非单日波动。
+2. 重点看：存款规模、存提差（留存利润）、注册与首存转化、各部门贡献占比变化。
+3. 明确指出哪些部门是本月增长引擎、哪些在拖后腿，用数字说话。
+4. 首存转化率（首存/注册）低于10%要点名。
+5. 存提差占存款比例下降，代表利润率恶化，须预警。
+6. 注意两个月天数可能不同（如31天 vs 30天），比较总量时要提示日均口径更公平。
+7. 给出下个月可执行的经营重点，不要空泛。
+8. 输出简体中文，专业简洁，适合 Telegram 阅读，总字数控制在 900 字以内。"""
+
+    user_prompt = f"""以下是两个整月的经营数据对比（JSON）：
+
+{data_json}
+
+请按以下格式输出月度复盘：
+
+【月度总览】
+（3-4 句话概括上月整体表现与最关键的变化）
+
+【核心指标环比】
+（存款、存提差、注册、首存的月环比，标注幅度与方向）
+
+【部门贡献分析】
+（哪些部门增长、哪些下滑，各自对大盘的影响，点名具体数字）
+
+【风险提示】
+（最多3条，格式：▶ [部门/指标] 问题 → 影响 → 建议）
+
+【下月经营重点】
+（3-5 条可执行建议）
+
+【一句话结论】"""
+
+    try:
+        ai_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+        message   = ai_client.messages.create(
+            model      = CLAUDE_MODEL,
+            max_tokens = 1600,
+            system     = system_prompt,
+            messages   = [{"role": "user", "content": user_prompt}],
+        )
+        return message.content[0].text.strip()
+    except Exception as e:
+        print(f"[Claude Monthly Error] {e}")
+        return ""
+
+async def send_monthly_review(bot, cur_ym: str):
+    """发送整月对比：数据块 + 月度 AI 复盘"""
+    prv_ym = prev_month(cur_ym)
+    c1, c2 = month_bounds(cur_ym)
+    p1, p2 = month_bounds(prv_ym)
+    cur = history_range_totals(SHANGHAI.localize(c1), SHANGHAI.localize(c2))
+    prv = history_range_totals(SHANGHAI.localize(p1), SHANGHAI.localize(p2))
+
+    if not cur['dept']:
+        await bot.send_message(chat_id=TG_CHAT_ID,
+                               text=f"⚠️ 历史表中查无 {cur_ym} 的数据，月度复盘跳过。")
+        return
+
+    MT = ["QY", "TH", "LW", "QM", "RB"]
+    RT = ["UED", "JX", "TQ"]
+
+    lines = [f"📈 {cur_ym} 月度总结（对比 {prv_ym}）", "",
+             f"统计天数：{cur_ym} {cur['days']}天　|　{prv_ym} {prv['days']}天", "",
+             group_block(f"MT {cur_ym}", MT, cur['dept'], cur['days']), "",
+             group_block(f"RT {cur_ym}", RT, cur['dept'], cur['days']),
+             "", "─" * 20, "",
+             group_block(f"MT {prv_ym}", MT, prv['dept'], prv['days']), "",
+             group_block(f"RT {prv_ym}", RT, prv['dept'], prv['days'])]
+    await bot.send_message(chat_id=TG_CHAT_ID, text="\n".join(lines))
+
+    def grp(members, src_):
+        return {f: fmt_num(group_sum_of(members, src_, f)) for f in SUMMARY_FIELDS}
+
+    def mom(members, field):
+        return pct_change(group_sum_of(members, cur['dept'], field),
+                          group_sum_of(members, prv['dept'], field))
+
+    payload = {
+        "本月": cur_ym, "上月": prv_ym,
+        "天数": {cur_ym: cur['days'], prv_ym: prv['days']},
+        f"MT合计_{cur_ym}": grp(MT, cur['dept']),
+        f"MT合计_{prv_ym}": grp(MT, prv['dept']),
+        f"RT合计_{cur_ym}": grp(RT, cur['dept']),
+        f"RT合计_{prv_ym}": grp(RT, prv['dept']),
+        "月环比": {
+            "MT存款": mom(MT, '存款'), "MT存提差": mom(MT, '存提差'), "MT注册": mom(MT, '注册'),
+            "RT存款": mom(RT, '存款'), "RT存提差": mom(RT, '存提差'), "RT注册": mom(RT, '注册'),
+        },
+        f"各部门_{cur_ym}": {k: {f: fmt_num(v[f]) for f in SUMMARY_FIELDS}
+                            for k, v in cur['dept'].items()},
+        f"各部门_{prv_ym}": {k: {f: fmt_num(v[f]) for f in SUMMARY_FIELDS}
+                            for k, v in prv['dept'].items()},
+    }
+
+    ai = call_claude_month(payload)
+    if ai:
+        await bot.send_message(chat_id=TG_CHAT_ID,
+                               text=f"🤖 {cur_ym} 月度经营复盘（vs {prv_ym}）\n\n{ai}")
+    elif CLAUDE_API_KEY:
+        await bot.send_message(chat_id=TG_CHAT_ID, text="⚠️ 月度 AI 复盘暂时不可用，已发送对比数据。")
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 async def main():
     yesterday = datetime.now(SHANGHAI) - timedelta(days=1)
@@ -801,7 +955,18 @@ async def main():
 
     bot = telegram.Bot(token=TG_TOKEN)
 
-    # 5. 尝试 Claude AI 分析
+    # 5. 判断走「月度复盘」还是「每日分析」
+    #    昨天 = 某月1号 → 上个月刚结束，改出月度对比
+    review_ym = MONTHLY_REVIEW
+    if not review_ym and yesterday.day == 1:
+        review_ym = (yesterday.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+
+    if review_ym:
+        await bot.send_message(chat_id=TG_CHAT_ID, text=raw_report)
+        await send_monthly_review(bot, review_ym)
+        return
+
+    # 6. 每日 AI 分析
     ai_report = ""
     if CLAUDE_API_KEY:
         try:
@@ -810,7 +975,7 @@ async def main():
         except Exception as e:
             print(f"[AI Analysis Error] {e}")
 
-    # 6. 发送消息（先发原始数据，再发 AI 分析）
+    # 7. 发送消息（先发原始数据，再发 AI 分析）
     await bot.send_message(chat_id=TG_CHAT_ID, text=raw_report)
     if ai_report:
         trend_note = "（含日/周/月趋势对比）" if has_history else "（历史数据积累中，趋势对比将在明日起生效）"
