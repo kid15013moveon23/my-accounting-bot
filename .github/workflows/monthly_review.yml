@@ -1,0 +1,61 @@
+name: 月度复盘（重抓两个月 + 对比）
+
+on:
+  workflow_dispatch:
+    inputs:
+      month:
+        description: '要复盘的月份，格式 2026-08（留空 = 上个完整月）'
+        required: false
+        default: ''
+
+jobs:
+  monthly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install gspread google-auth python-telegram-bot==21.6 pytz anthropic
+
+      - name: 计算月份范围
+        id: r
+        env:
+          IN_MONTH: ${{ inputs.month }}
+        run: |
+          python - <<'PY' >> $GITHUB_OUTPUT
+          import os, datetime, calendar
+          ym = os.environ.get('IN_MONTH','').strip()
+          if not ym:
+              today = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+              first = today.replace(day=1)
+              ym = (first - datetime.timedelta(days=1)).strftime('%Y-%m')
+          y, m = map(int, ym.split('-'))
+          py_, pm = (y-1, 12) if m == 1 else (y, m-1)
+          start = f"{py_}-{pm:02d}-01"
+          end   = f"{y}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}"
+          print(f"cur={ym}")
+          print(f"start={start}")
+          print(f"end={end}")
+          PY
+
+      - name: 重抓两个月数据
+        env:
+          GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
+          HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
+          BACKFILL_START: ${{ steps.r.outputs.start }}
+          BACKFILL_END: ${{ steps.r.outputs.end }}
+        run: python backfill_history.py
+
+      - name: 发送月度复盘
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
+          CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
+          MONTHLY_REVIEW: ${{ steps.r.outputs.cur }}
+        run: python send_report.py
