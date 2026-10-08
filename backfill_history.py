@@ -40,7 +40,7 @@ DEPARTMENTS = [
     {"label":"QY","group":"MT","sheet_id":"1NMOTloCNN7lDpa2Wjtehcdx75UU7Rx7HAepXYv5SgB0","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":3,"存款":9,"提款":12,"存提差":13,"活跃":10}},
     {"label":"TQ","group":"RT","sheet_id":"1RbcFCX8a-vUwsRKcu2ONzu_IBx0gyUw4Kds7HXwfUNM","worksheet":"每日明细","date_col":0,"direction":"top","columns":{"注册":24,"首存":25,"存款":3,"提款":4,"存提差":5,"活跃":18}},
     {"label":"TH","group":"MT","sheet_id":"1JKgkLj_ltl5wwhB7u4Uy8DBgznKpys75kGdJZF9LBuQ","worksheet":"每日基础数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
-    {"label":"LW","group":"MT","sheet_id":"1BqU6DF7SReWGZSCeT0vtJH4RoVtc2qMMah5PR9ZF2AI","worksheet":"网站基本日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":9,"存提差":10,"活跃":11}},
+    {"label":"LW","group":"MT","sheet_id":"1BqU6DF7SReWGZSCeT0vtJH4RoVtc2qMMah5PR9ZF2AI","worksheet":"网站基本日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":3,"存款":8,"提款":9,"存提差":10,"活跃":11}},
     {"label":"JX","group":"RT","sheet_id":"1oCYfkGtDaGeGguS5XkpPjyvGZnzUfC_whVrGdZgbqMM","worksheet":"每日明细","date_col":0,"direction":"top","columns":{"注册":24,"首存":25,"存款":3,"提款":4,"存提差":5,"活跃":18}},
 ]
 
