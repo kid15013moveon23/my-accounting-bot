@@ -898,29 +898,49 @@ def _pick_cjk_font():
         pass
     return None
 
-def trend_series(end: datetime, days: int = 30) -> dict:
-    """{日期: {'MT': {字段: 值}, 'RT': {...}}}，按组汇总的近 days 天"""
-    out = {}
+def trend_series(end: datetime, days: int = 30):
+    """返回 (按组汇总的近 days 天数据, 缺失清单)
+    缺失清单非空 = 有部门当天没数据，此时不出图（宁可不画，也不画错的）"""
+    out, seen, missing = {}, {}, []
     if not HISTORY_SHEET_ID:
-        return out
+        return out, ["未设置 HISTORY_SHEET_ID"]
     try:
-        ws    = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
-        rows  = ws.get_all_values()[1:]
-        start = end - timedelta(days=days - 1)
-        s, e  = start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
-        for r in rows:
-            if len(r) < 9 or not r[0]:
-                continue
-            ds, grp = r[0].strip(), r[2].strip()
-            if grp not in ('MT', 'RT') or not (s <= ds <= e):
-                continue
-            g = out.setdefault(ds, {'MT': {}, 'RT': {}})[grp]
-            for k, idx in (('首存', 4), ('存款', 5), ('存提差', 7), ('活跃', 8)):
-                g[k] = g.get(k, 0.0) + parse_num(r[idx])
-        return out
+        ws   = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
+        rows = ws.get_all_values()[1:]
     except Exception as ex:
         print(f"[Trend] 历史表读取失败: {ex}")
-        return out
+        return out, [f"历史表读取失败: {ex}"]
+
+    start   = end - timedelta(days=days - 1)
+    want    = [(start + timedelta(days=k)).strftime('%Y-%m-%d') for k in range(days)]
+    wantset = set(want)
+    FIELDS  = (('首存', 4), ('存款', 5), ('存提差', 7), ('活跃', 8))
+    EMPTY   = ('', '—', '-', '--', 'N/A', 'n/a')
+
+    for r in rows:
+        if len(r) < 9 or not r[0]:
+            continue
+        ds, dept, grp = r[0].strip(), r[1].strip(), r[2].strip()
+        if ds not in wantset or grp not in ('MT', 'RT'):
+            continue
+        blanks = [k for k, idx in FIELDS if str(r[idx]).strip() in EMPTY]
+        seen.setdefault(ds, {})[dept] = blanks
+        g = out.setdefault(ds, {'MT': {}, 'RT': {}})[grp]
+        for k, idx in FIELDS:
+            g[k] = g.get(k, 0.0) + parse_num(r[idx])
+
+    labels = [d['label'] for d in DEPARTMENTS]
+    for ds in want:
+        got = seen.get(ds)
+        if not got:
+            missing.append(f"{ds} 全部部门无记录")
+            continue
+        for lb in labels:
+            if lb not in got:
+                missing.append(f"{ds} {lb} 无记录")
+            elif got[lb]:
+                missing.append(f"{ds} {lb} 缺 {'/'.join(got[lb])}")
+    return out, missing
 
 def make_trend_charts(acc: dict, outdir: str = ".") -> list:
     """生成两张趋势图，返回 [(文件路径, 说明), ...]"""
@@ -1081,7 +1101,18 @@ def make_trend_charts(acc: dict, outdir: str = ".") -> list:
 async def send_trend_charts(bot, end: datetime, days: int = 30):
     """生成并发送趋势图；任何失败都不影响日报主流程"""
     try:
-        acc   = trend_series(end, days)
+        acc, missing = trend_series(end, days)
+        if missing:
+            head = missing[:12]
+            more = f"\n…等共 {len(missing)} 项" if len(missing) > 12 else ""
+            await bot.send_message(
+                chat_id=TG_CHAT_ID,
+                text=(f"⚠️ 趋势图已跳过：近 {days} 日数据不完整\n"
+                      f"（任一部门缺数据，汇总就会偏低，宁可不画）\n\n"
+                      + "\n".join("· " + m for m in head) + more
+                      + "\n\n补齐后可发 /update 日期 或 /month 重抓。"))
+            print(f"[Trend] 数据不完整（{len(missing)} 项），跳过出图")
+            return
         charts = make_trend_charts(acc)
         for path, cap in charts:
             with open(path, 'rb') as fh:
