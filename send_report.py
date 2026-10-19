@@ -200,6 +200,22 @@ def load_real_dates(ws, date_col, n_rows):
         print(f"[RealDate] 原始日期读取失败，回退文本匹配: {e}")
         return None
 
+def loose_match(cell: str, variants) -> bool:
+    """包含匹配，但变体前后不得紧邻数字。
+    否则找「10/1」会错配到「10/19」「10/12」，1/2/3 号永远抓错行。"""
+    for v in variants:
+        start = 0
+        while True:
+            i = cell.find(v, start)
+            if i < 0:
+                break
+            before = cell[i - 1] if i > 0 else ''
+            after  = cell[i + len(v)] if i + len(v) < len(cell) else ''
+            if not before.isdigit() and not after.isdigit():
+                return True
+            start = i + 1
+    return False
+
 def find_data_row(all_data, direction, date_col, target_date, real_dates=None):
     variants  = date_variants(target_date)
     data_rows = all_data[1:]
@@ -230,7 +246,7 @@ def find_data_row(all_data, direction, date_col, target_date, real_dates=None):
     for row in ordered:
         if not valid(row): continue
         v = row[date_col].strip()
-        if any(var in v for var in variants):
+        if loose_match(v, variants):
             return row, v, True
     for row in ordered:
         if not valid(row): continue
