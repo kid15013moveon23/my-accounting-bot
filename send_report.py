@@ -28,6 +28,9 @@ ONLY_DATE        = os.environ.get('ONLY_DATE', '').strip()
 # 月度对比模式：'YYYY-MM' 指定要总结的月份；留空则在「昨天=1号」时自动启用
 MONTHLY_REVIEW   = os.environ.get('MONTHLY_REVIEW', '').strip()
 
+# 只出趋势图模式（TG /chart）：填天数，如 '30'；留空 = 不启用
+CHART_ONLY       = os.environ.get('CHART_ONLY', '').strip()
+
 SHANGHAI = pytz.timezone('Asia/Shanghai')
 SCOPES   = ['https://www.googleapis.com/auth/spreadsheets']   # 需要写权限
 creds    = Credentials.from_service_account_info(SA_JSON, scopes=SCOPES)
@@ -1125,6 +1128,18 @@ async def send_trend_charts(bot, end: datetime, days: int = 30):
 
 async def main():
     yesterday = datetime.now(SHANGHAI) - timedelta(days=1)
+
+    # ── 只出趋势图模式：不抓源表、不写历史、不跑 AI ──
+    if CHART_ONLY:
+        try:
+            days = int(CHART_ONLY)
+        except ValueError:
+            days = 30
+        days = max(2, min(180, days))
+        print(f"[趋势图] 只出图模式，近 {days} 日")
+        bot = telegram.Bot(token=TG_TOKEN)
+        await send_trend_charts(bot, yesterday, days=days)
+        return
 
     # ── 单平台更新模式：只抓一个部门，不做汇总与 AI 分析 ──
     if ONLY_DEPT:
