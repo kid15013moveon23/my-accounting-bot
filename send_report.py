@@ -867,6 +867,215 @@ async def send_monthly_review(bot, cur_ym: str):
         await bot.send_message(chat_id=TG_CHAT_ID, text="⚠️ 月度 AI 复盘暂时不可用，已发送对比数据。")
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
+# ─── 趋势图（近30日，MT / RT 两组）────────────────────────────────────────────
+def _pick_cjk_font():
+    """挑一个可用的中文字体；没有就返回 None（改用英文标签）"""
+    try:
+        from matplotlib import font_manager
+        avail = {f.name for f in font_manager.fontManager.ttflist}
+        for c in ("Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK TC",
+                  "Noto Serif CJK SC", "Source Han Sans SC",
+                  "WenQuanYi Zen Hei", "Droid Sans Fallback"):
+            if c in avail:
+                return c
+    except Exception:
+        pass
+    return None
+
+def trend_series(end: datetime, days: int = 30) -> dict:
+    """{日期: {'MT': {字段: 值}, 'RT': {...}}}，按组汇总的近 days 天"""
+    out = {}
+    if not HISTORY_SHEET_ID:
+        return out
+    try:
+        ws    = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
+        rows  = ws.get_all_values()[1:]
+        start = end - timedelta(days=days - 1)
+        s, e  = start.strftime('%Y-%m-%d'), end.strftime('%Y-%m-%d')
+        for r in rows:
+            if len(r) < 9 or not r[0]:
+                continue
+            ds, grp = r[0].strip(), r[2].strip()
+            if grp not in ('MT', 'RT') or not (s <= ds <= e):
+                continue
+            g = out.setdefault(ds, {'MT': {}, 'RT': {}})[grp]
+            for k, idx in (('首存', 4), ('存款', 5), ('存提差', 7), ('活跃', 8)):
+                g[k] = g.get(k, 0.0) + parse_num(r[idx])
+        return out
+    except Exception as ex:
+        print(f"[Trend] 历史表读取失败: {ex}")
+        return out
+
+def make_trend_charts(acc: dict, outdir: str = ".") -> list:
+    """生成两张趋势图，返回 [(文件路径, 说明), ...]"""
+    dates = sorted(acc.keys())
+    if len(dates) < 2:
+        print("[Trend] 数据不足 2 天，跳过出图")
+        return []
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.ticker import FuncFormatter
+    except Exception as ex:
+        print(f"[Trend] matplotlib 不可用: {ex}")
+        return []
+
+    font = _pick_cjk_font()
+    if font:
+        matplotlib.rcParams['font.sans-serif'] = [font]
+        matplotlib.rcParams['font.family'] = 'sans-serif'
+    matplotlib.rcParams['axes.unicode_minus'] = False
+    cn = bool(font)
+
+    L = {
+        '存款':   '存款'   if cn else 'Deposit',
+        '存提差': '存提差' if cn else 'Net (Dep-WD)',
+        '首存':   '首存'   if cn else 'First Deposit',
+        '活跃':   '活跃人数' if cn else 'Active Users',
+        'title1': f'存款 / 存提差 趋势（近{len(dates)}日）' if cn else f'Deposit / Net Trend (last {len(dates)}d)',
+        'title2': f'首存 / 活跃人数 趋势（近{len(dates)}日）' if cn else f'First Deposit / Active Trend (last {len(dates)}d)',
+    }
+
+    xs = [datetime.strptime(d, '%Y-%m-%d') for d in dates]
+    def ser(grp, field):
+        return [acc[d].get(grp, {}).get(field, 0.0) for d in dates]
+
+    def wan(v, _=None):
+        if abs(v) >= 1e8: return f'{v/1e8:.1f}亿' if cn else f'{v/1e6:.0f}M'
+        if abs(v) >= 1e4: return f'{v/1e4:.0f}万' if cn else f'{v/1e3:.0f}K'
+        return f'{v:.0f}'
+
+    def _box(fig, ax, xy, text, off, fs, ha, grow=0):
+        """估算标注文字在像素坐标里的包围盒"""
+        import matplotlib.dates as _md
+        px, py = ax.transData.transform((_md.date2num(xy[0]), xy[1]))
+        k = fig.dpi / 72.0
+        w = sum(1.0 if ord(c) > 0x2E80 else .58 for c in text) * fs * k
+        h = fs * 1.6 * k
+        cx = px + off[0] * k + (w / 2 if ha == 'left' else 0)
+        cy = py + off[1] * k
+        g = grow
+        return (cx - w / 2 - 2 - g, cy - h / 2 - 1 - g,
+                cx + w / 2 + 2 + g, cy + h / 2 + 1 + g)
+
+    def _hit(b, placed):
+        return any(not (b[2] < q[0] or b[0] > q[2] or b[3] < q[1] or b[1] > q[3])
+                   for q in placed)
+
+    def place(fig, ax, xy, text, cands, fs, ha, color, placed, boxed=False):
+        g = 8 if boxed else 1          # 带边框的标签实际更大，留出余量
+        off = cands[-1]
+        for c in cands:
+            b = _box(fig, ax, xy, text, c, fs, ha, g)
+            if not _hit(b, placed):
+                off = c
+                break
+        placed.append(_box(fig, ax, xy, text, off, fs, ha, g))
+        kw = dict(textcoords='offset points', xytext=off, ha=ha,
+                  va='center', fontsize=fs, color=color, fontweight='bold',
+                  zorder=6)
+        if boxed:
+            kw['bbox'] = dict(boxstyle='round,pad=0.28', fc='white',
+                              ec=color, lw=1.0, alpha=.93)
+        ax.annotate(text, xy, **kw)
+
+    def annotate(fig, ax, X, Y, color, money, placed, phase):
+        """phase='last' 标最近一天；phase='hilo' 标最高最低"""
+        if len(Y) < 2:
+            return
+        f = wan if money else (lambda v, _=None: f'{v:,.0f}')
+        i_hi = max(range(len(Y)), key=lambda i: Y[i])
+        i_lo = min(range(len(Y)), key=lambda i: Y[i])
+        last = len(Y) - 1
+
+        if phase == 'last':
+            tag = '↑' if i_hi == last else ('↓' if i_lo == last else '')
+            ax.scatter([X[last]], [Y[last]], s=52, color=color, zorder=5,
+                       edgecolor='white', linewidth=1.3)
+            place(fig, ax, (X[last], Y[last]), f'{tag}{f(Y[last])}',
+                  [(9, 0), (9, 26), (9, -26), (9, 52), (9, -52)],
+                  9.5, 'left', color, placed, boxed=True)
+            return
+
+        if i_hi != last:
+            place(fig, ax, (X[i_hi], Y[i_hi]), f'↑{f(Y[i_hi])}',
+                  [(0, 13), (0, 35), (-10, 13), (10, 35), (0, 57)],
+                  8.5, 'center', color, placed)
+        if i_lo != last:
+            place(fig, ax, (X[i_lo], Y[i_lo]), f'↓{f(Y[i_lo])}',
+                  [(0, -15), (0, -37), (-10, -15), (10, -37), (0, -59)],
+                  8.5, 'center', color, placed)
+
+    C = {'MT': '#2563eb', 'RT': '#dc2626'}
+    files = []
+
+    def draw(fields, title, fname, money):
+        fig, axes = plt.subplots(2, 1, figsize=(11, 7.8), sharex=True)
+        series = {}
+        for ax, f in zip(axes, fields):
+            for grp in ('MT', 'RT'):
+                ys = ser(grp, f)
+                series[(f, grp)] = ys
+                ax.plot(xs, ys, marker='o', ms=3.5, lw=1.8,
+                        color=C[grp], label=grp)
+            ax.margins(y=.22)
+            span = (xs[-1] - xs[0]) or timedelta(days=1)
+            ax.set_xlim(xs[0] - span * .02, xs[-1] + span * .14)
+            ax.set_title(L[f], fontsize=12, loc='left', pad=8)
+            ax.grid(alpha=.25, ls='--')
+            # 图例放在图框外（右上），避免与标注重叠
+            ax.legend(loc='lower right', bbox_to_anchor=(1, 1.0),
+                      fontsize=9, ncol=2, frameon=False)
+            if money:
+                ax.yaxis.set_major_formatter(FuncFormatter(wan))
+            ax.axhline(0, color='#999', lw=.8)
+        step = max(1, len(xs) // 10)
+        axes[-1].set_xticks(xs[::step])
+        axes[-1].set_xticklabels([d.strftime('%m-%d') for d in xs[::step]],
+                                 rotation=0, fontsize=9)
+        fig.suptitle(title, fontsize=14, y=.985)
+        fig.tight_layout(rect=[0, 0, 1, .955])
+        fig.canvas.draw()          # 先定稿坐标，再按像素做避让
+        import matplotlib.dates as _md
+        for ax, f in zip(axes, fields):
+            placed = []
+            for grp in ('MT', 'RT'):      # 折线数据点作为障碍物
+                for dx, dy in zip(xs, series[(f, grp)]):
+                    qx, qy = ax.transData.transform((_md.date2num(dx), dy))
+                    placed.append((qx - 4, qy - 4, qx + 4, qy + 4))
+            for phase in ('last', 'hilo'):
+                for grp in ('MT', 'RT'):
+                    annotate(fig, ax, xs, series[(f, grp)], C[grp],
+                             money, placed, phase)
+        path = os.path.join(outdir, fname)
+        fig.savefig(path, dpi=130)
+        plt.close(fig)
+        return path
+
+    try:
+        files.append((draw(['存款', '存提差'], L['title1'], 'trend_money.png', True),
+                      L['title1']))
+        files.append((draw(['首存', '活跃'], L['title2'], 'trend_people.png', False),
+                      L['title2']))
+    except Exception as ex:
+        print(f"[Trend] 出图失败: {ex}")
+    return files
+
+async def send_trend_charts(bot, end: datetime, days: int = 30):
+    """生成并发送趋势图；任何失败都不影响日报主流程"""
+    try:
+        acc   = trend_series(end, days)
+        charts = make_trend_charts(acc)
+        for path, cap in charts:
+            with open(path, 'rb') as fh:
+                await bot.send_photo(chat_id=TG_CHAT_ID, photo=fh, caption=cap)
+        if charts:
+            print(f"[Trend] 已发送 {len(charts)} 张趋势图")
+    except Exception as ex:
+        print(f"[Trend] 发送失败（不影响日报）: {ex}")
+
+
 async def main():
     yesterday = datetime.now(SHANGHAI) - timedelta(days=1)
 
@@ -975,8 +1184,9 @@ async def main():
         except Exception as e:
             print(f"[AI Analysis Error] {e}")
 
-    # 7. 发送消息（先发原始数据，再发 AI 分析）
+    # 7. 发送消息（原始数据 → 趋势图 → AI 分析）
     await bot.send_message(chat_id=TG_CHAT_ID, text=raw_report)
+    await send_trend_charts(bot, yesterday, days=30)
     if ai_report:
         trend_note = "（含日/周/月趋势对比）" if has_history else "（历史数据积累中，趋势对比将在明日起生效）"
         ai_message = f"🤖 {date_label} COO 经营简报 {trend_note}\n\n{ai_report}"
