@@ -31,6 +31,10 @@ MONTHLY_REVIEW   = os.environ.get('MONTHLY_REVIEW', '').strip()
 # 只出趋势图模式（TG /chart）：填天数，如 '30'；留空 = 不启用
 CHART_ONLY       = os.environ.get('CHART_ONLY', '').strip()
 
+# 指定日报要报哪一天：'YYYY-MM-DD'；留空 = 昨天
+# 重抓（/update、/month）完重发时会带上，让日报对准你指定的那天
+REPORT_DATE      = os.environ.get('REPORT_DATE', '').strip()
+
 SHANGHAI = pytz.timezone('Asia/Shanghai')
 SCOPES   = ['https://www.googleapis.com/auth/spreadsheets']   # 需要写权限
 creds    = Credentials.from_service_account_info(SA_JSON, scopes=SCOPES)
@@ -1129,6 +1133,14 @@ async def send_trend_charts(bot, end: datetime, days: int = 30):
 async def main():
     yesterday = datetime.now(SHANGHAI) - timedelta(days=1)
 
+    # 指定日报日期（重抓后重发时使用）
+    if REPORT_DATE:
+        try:
+            yesterday = SHANGHAI.localize(datetime.strptime(REPORT_DATE, '%Y-%m-%d'))
+            print(f"[日报] 指定日期模式：{REPORT_DATE}")
+        except ValueError:
+            print(f"[日报] REPORT_DATE 格式错误（应为 2026-10-17）: {REPORT_DATE}，改用昨天")
+
     # ── 只出趋势图模式：不抓源表、不写历史、不跑 AI ──
     if CHART_ONLY:
         try:
@@ -1229,7 +1241,8 @@ async def main():
     # 5. 判断走「月度复盘」还是「每日分析」
     #    昨天 = 某月1号 → 上个月刚结束，改出月度对比
     review_ym = MONTHLY_REVIEW
-    if not review_ym and yesterday.day == 1:
+    # 指定日期重发时不自动触发月度复盘（否则 /update 某月1号会误触发）
+    if not review_ym and not REPORT_DATE and yesterday.day == 1:
         review_ym = (yesterday.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
 
     if review_ym:
