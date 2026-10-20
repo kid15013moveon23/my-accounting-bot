@@ -905,18 +905,29 @@ def _pick_cjk_font():
         pass
     return None
 
+READ_ERR = "__READ_ERROR__"   # 读取失败的标记，与「数据真的缺」区分
+
 def trend_series(end: datetime, days: int = 30):
     """返回 (按组汇总的近 days 天数据, 缺失清单)
     缺失清单非空 = 有部门当天没数据，此时不出图（宁可不画，也不画错的）"""
     out, seen, missing = {}, {}, []
     if not HISTORY_SHEET_ID:
-        return out, ["未设置 HISTORY_SHEET_ID"]
-    try:
-        ws   = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
-        rows = ws.get_all_values()[1:]
-    except Exception as ex:
-        print(f"[Trend] 历史表读取失败: {ex}")
-        return out, [f"历史表读取失败: {ex}"]
+        return out, [READ_ERR + "未设置 HISTORY_SHEET_ID"]
+
+    # 刚跑完重抓时 Sheets 读取配额可能暂时打满，退避重试几次
+    rows, last_err = None, None
+    for attempt in range(3):
+        try:
+            ws   = client.open_by_key(HISTORY_SHEET_ID).worksheets()[0]
+            rows = ws.get_all_values()[1:]
+            break
+        except Exception as ex:
+            last_err = ex
+            print(f"[Trend] 历史表读取失败（第 {attempt + 1} 次）: {ex}")
+            if attempt < 2:
+                time.sleep(25)
+    if rows is None:
+        return out, [READ_ERR + str(last_err)]
 
     start   = end - timedelta(days=days - 1)
     want    = [(start + timedelta(days=k)).strftime('%Y-%m-%d') for k in range(days)]
@@ -1109,6 +1120,13 @@ async def send_trend_charts(bot, end: datetime, days: int = 30):
     """生成并发送趋势图；任何失败都不影响日报主流程"""
     try:
         acc, missing = trend_series(end, days)
+        if missing and missing[0].startswith(READ_ERR):
+            await bot.send_message(
+                chat_id=TG_CHAT_ID,
+                text="⚠️ 趋势图这次没出：历史表暂时读不到（多半是 Google 每分钟读取限额）。\n"
+                     "数据本身没问题，稍后发 /chart 即可重出。")
+            print(f"[Trend] 历史表读取失败，跳过出图：{missing[0]}")
+            return
         if missing:
             head = missing[:12]
             more = f"\n…等共 {len(missing)} 项" if len(missing) > 12 else ""
