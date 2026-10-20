@@ -29,8 +29,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: 安装中文字体
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
       - name: 安装依赖
-        run: pip install gspread google-auth python-telegram-bot==21.6 pytz anthropic
+        run: pip install gspread google-auth python-telegram-bot==21.6 pytz anthropic matplotlib
       - name: 重新抓取并覆盖历史数据
         env:
           GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
@@ -46,4 +48,6 @@ jobs:
           GSHEET_SA_JSON: ${{ secrets.GSHEET_SA_JSON }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           HISTORY_SHEET_ID: ${{ secrets.HISTORY_SHEET_ID }}
+          # 日报对准这次重抓的最后一天，而不是永远报昨天
+          REPORT_DATE: ${{ inputs.end_date != '' && inputs.end_date || inputs.start_date }}
         run: python send_report.py
