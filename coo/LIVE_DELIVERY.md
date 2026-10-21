@@ -24,4 +24,10 @@ A delivery ledger artifact is written as attempted before the send and updated t
 
 Fourteen encryption and transport unit tests passed on GitHub. Fresh Teams-source end-to-end test run 39587590378 succeeded and returned Telegram photo message ID 763. Ledger artifact coo-delivery-75639869299ddbfe1815eaa552a6aa57 was created. Test data explicitly identifies the available business date and missing reporting window.
 
-The native automation's first manual execution is being checked separately; an enabled schedule or a run request is not itself proof of report delivery.
+## Native scheduler execution verified
+
+The actual enabled COO automation was run immediately on 2026-10-21. It independently read Teams, encrypted its fees report and created inbox/2026-10-21-fees.json. GitHub run 39588146122 succeeded and Telegram accepted two photos, message IDs 764 and 765, at 18:56:02 UTC+8. This verifies the native task-to-GitHub-to-Telegram bridge, beyond the transport-only smoke test. The public inbox file was checked to contain only the authenticated encrypted envelope, with no plaintext cards.
+
+All eight product source channels and the core COO management chat were successfully read during setup. Final future report data completeness still depends on what has actually been posted in Teams and must be disclosed each run. Morning and Friday report content rules use the same verified delivery bridge.
+
+Two additional local guard tests passed: an existing attempted-delivery ledger blocks every send, and a commit containing multiple reports is rejected before decryption. These are included for future workflow runs (16 total encryption/transport/guard tests).
