@@ -37,10 +37,14 @@ def main():
     ledger=ledger_dir/'receipt.json'
     receipt={'report_id':envelope['report_id'],'status':'prepared','artifact_name':artifact_name}
     with open(os.environ['GITHUB_OUTPUT'],'a') as out:out.write('ledger_name='+artifact_name+'\n')
+    if payload.get('kind')=='fees' and len(payload.get('cards',[]))!=1:
+        raise ValueError('Fees report must contain exactly one card')
     caption=payload.get('caption',payload['date']+' COO重点报告')
     if len(caption)>1024:raise ValueError('Caption exceeds Telegram limit')
     with tempfile.TemporaryDirectory() as tmp:
         images=render_cards(payload,tmp)
+        if payload.get('kind')=='fees' and len(images)!=1:
+            raise ValueError('Fees report must render exactly one image')
         receipt['status']='attempted_delivery_outcome_unknown'
         ledger.write_text(json.dumps(receipt))
         sent=send_images(images,requests.Session(),token,os.environ['TG_CHAT_ID'].strip(),caption)
