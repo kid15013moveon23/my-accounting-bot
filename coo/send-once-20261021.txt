@@ -1,1 +1,2 @@
-Launch read-only diagnostics only. No Telegram sendDocument calls.
+Send existing 2026-10-21 PDF once to verified MMTTDAY💰.
+Read-only diagnostics proved first attempt stopped at title mismatch before sendDocument.
