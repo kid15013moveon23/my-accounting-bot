@@ -1,0 +1,27 @@
+name: COO PDF 独立发送测试
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: coo-document-send-test
+  cancel-in-progress: false
+jobs:
+  test-send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Transport unit tests
+        run: python -m unittest discover -s coo -p 'test_transport.py' -v
+      - name: Install isolated dependency
+        run: python -m pip install requests==2.32.5
+      - name: Send existing private COO PDF once
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          COO_TEST_PDF_ZLIB_B64: ${{ secrets.COO_TEST_PDF_ZLIB_B64 }}
+        run: python coo/test_send.py
