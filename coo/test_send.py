@@ -22,13 +22,13 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'COO_2026-10-21_7of8_TEST.pdf'
         path.write_bytes(pdf)
-        receipt = send_document(path, requests.Session(), os.environ['TG_TOKEN'].strip(), os.environ['TG_CHAT_ID'].strip())
+        receipt = send_document(path, requests.Session(), os.environ['TG_TOKEN'].strip(), os.environ['TG_CHAT_ID'].strip(), expected_title='MMTTDAY💰')
     # No document contents, bot token, file ID, or raw chat ID in public logs/artifacts.
     safe = {k: receipt[k] for k in ('status', 'message_id', 'sha256', 'verified_at')}
     print(json.dumps(safe))
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-            summary.write('### COO PDF test receipt\n\nDestination verified: **MMTTDAY**\n\n')
+            summary.write('### COO PDF test receipt\n\nDestination verified: **MMTTDAY💰**\n\n')
             summary.write('```json\n' + json.dumps(safe, indent=2) + '\n```\n')
             summary.write('Telegram accepted the existing 7/8-product report. This is not a fresh full eight-product report or proof of human reading.\n')
 
