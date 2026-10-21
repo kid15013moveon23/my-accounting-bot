@@ -1,9 +1,6 @@
 name: COO 重点图片发送测试
 on:
   workflow_dispatch:
-  push:
-    branches: ['coo/manual-delivery-test-20261021']
-    paths: ['coo/image-send-once-20261021.txt']
 permissions:
   contents: read
 concurrency:
