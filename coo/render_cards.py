@@ -47,6 +47,39 @@ def render_cards(payload, output_dir, font_path=None):
         y=265
         text(payload['notice'],30,'#9A5B10')
         y += 18
+        if card.get('chart'):
+            chart=card['chart']
+            labels=chart['labels']; previous=chart['previous']; current=chart['current']
+            if not (len(labels)==len(previous)==len(current)==8):raise ValueError('Eight products required')
+            def fmt(v):
+                return ('-' if v<0 else '')+('%0.1f万'%(abs(v)/10000))
+            top=y+38; graph_h=410; base=top+230
+            max_abs=max(1,max(abs(float(v)) for v in previous+current))
+            draw.line((PAD,base,WIDTH-PAD,base),fill='#BCC8D3',width=3)
+            for i,label in enumerate(labels):
+                xc=PAD+56+i*119
+                for j,(v,color) in enumerate(((float(previous[i]),'#5683D8'),(float(current[i]),'#4B9C85'))):
+                    h=round(abs(v)/max_abs*188); x=xc+(j*36)-24
+                    if v>=0:draw.rounded_rectangle((x,base-h,x+32,base),radius=5,fill=color)
+                    else:draw.rounded_rectangle((x,base,x+32,base+h),radius=5,fill=color)
+                    val=fmt(v)
+                    tw=draw.textlength(val,font=fonts[26]); tx=x+16-tw/2
+                    ty=base-h-36 if v>=0 else base+h+4
+                    draw.text((tx,ty),val,font=fonts[26],fill='#24394F')
+                tw=draw.textlength(str(label),font=fonts[30])
+                draw.text((xc-tw/2+6,base+205),str(label),font=fonts[30],fill='#20374B')
+            y=top+graph_h+80
+            text('■ 前期    ■ 本期  |  标签显示实际金额（万）',26,'#586A7D')
+            y+=15
+        if card.get('dashboard'):
+            dashboard=card['dashboard']; names=['RT','MT','总']; metrics=dashboard['metrics']
+            for name in names:
+                text(name+'  核心指标',38,'#126F78'); y+=5
+                data=dashboard[name]
+                for metric in metrics:
+                    item=data[metric]
+                    text(metric+'：'+str(item['value'])+'  ('+str(item['delta'])+')',30)
+                y+=22
         if card.get('table'):
             rows=card['table']
             draw.rounded_rectangle((PAD-20,y-12,WIDTH-PAD+20,y+len(rows)*78+12),radius=20,fill='white')
