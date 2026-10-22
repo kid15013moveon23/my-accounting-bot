@@ -64,7 +64,7 @@ def render_cards(payload, output_dir, font_path=None):
                     else:draw.rounded_rectangle((x,base,x+32,base+h),radius=5,fill=color)
                     val=fmt(v)
                     tw=draw.textlength(val,font=fonts[26]); tx=x+16-tw/2
-                    ty=base-h-36 if v>=0 else base+h+4
+                    ty=base-h-(75 if j==0 else 28) if v>=0 else base+h+(5 if j==0 else 47)
                     draw.text((tx,ty),val,font=fonts[26],fill='#24394F')
                 tw=draw.textlength(str(label),font=fonts[30])
                 draw.text((xc-tw/2+6,base+205),str(label),font=fonts[30],fill='#20374B')
