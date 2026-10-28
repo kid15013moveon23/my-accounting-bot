@@ -720,6 +720,36 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
     return payload
 
 # ─── Claude AI 分析 ────────────────────────────────────────────────────────────
+def check_model_status() -> str:
+    """查 Models API：模型被标成 deprecated/retired 时回传提醒文字，正常则回传空字符串。
+    只读一个很小的 JSON，不经过模型推理，不消耗 token。"""
+    if not CLAUDE_API_KEY:
+        return ""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"https://api.anthropic.com/v1/models/{CLAUDE_MODEL}",
+            headers={"x-api-key": CLAUDE_API_KEY,
+                     "anthropic-version": "2023-06-01"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            info = json.loads(r.read().decode())
+    except Exception as e:
+        print(f"[Model] 状态查询失败（忽略）: {e}")
+        return ""
+
+    life = str(info.get('lifecycle', 'active'))
+    name = info.get('display_name', CLAUDE_MODEL)
+    print(f"[Model] {CLAUDE_MODEL} lifecycle={life}")
+    if life == 'active':
+        return ""
+    return ("⚠️ AI 模型需要更换\n\n"
+            f"目前使用：{name}\n"
+            f"模型代号：{CLAUDE_MODEL}\n"
+            f"状态：{life}\n"
+            f"预计退役：{info.get('retires_at') or '未公布'}\n\n"
+            "退役后 AI 简报会停掉（原始数据与趋势图不受影响）。\n"
+            "请找 Claude 更新 send_report.py 的 CLAUDE_MODEL。")
+
 def extract_text(message) -> str:
     """只取回复里的文字块。
     新模型（Sonnet 5.5 等）thinking 默认开启，content[0] 是 ThinkingBlock，
@@ -1304,6 +1334,11 @@ async def main():
             chat_id=TG_CHAT_ID,
             text="⚠️ AI 分析暂时不可用，已发送原始数据日报。"
         )
+
+    # 8. 模型生命周期检查：被标成 deprecated/retired 才出声
+    note = check_model_status()
+    if note:
+        await bot.send_message(chat_id=TG_CHAT_ID, text=note)
 
 if __name__ == "__main__":
     asyncio.run(main())
