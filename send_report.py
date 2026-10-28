@@ -18,7 +18,7 @@ TG_TOKEN         = os.environ['TG_TOKEN']
 TG_CHAT_ID       = os.environ['TG_CHAT_ID']
 SA_JSON          = json.loads(os.environ['GSHEET_SA_JSON'])
 CLAUDE_API_KEY   = os.environ.get('CLAUDE_API_KEY', '')
-CLAUDE_MODEL     = os.environ.get('CLAUDE_MODEL', 'claude-haiku-4-5-20251001')
+CLAUDE_MODEL     = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-5-5')
 HISTORY_SHEET_ID = os.environ.get('HISTORY_SHEET_ID', '')
 
 # 单平台更新模式：只抓一个部门、只更新历史表该行、不跑 AI
