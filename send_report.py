@@ -720,6 +720,16 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
     return payload
 
 # ─── Claude AI 分析 ────────────────────────────────────────────────────────────
+def extract_text(message) -> str:
+    """只取回复里的文字块。
+    新模型（Sonnet 5.5 等）thinking 默认开启，content[0] 是 ThinkingBlock，
+    直接取 content[0].text 会报 'ThinkingBlock' object has no attribute 'text'。"""
+    parts = [b.text for b in message.content
+             if getattr(b, 'type', '') == 'text' and hasattr(b, 'text')]
+    if not parts:                      # 保底：捡任何带 text 的块
+        parts = [b.text for b in message.content if hasattr(b, 'text')]
+    return "".join(parts).strip()
+
 def call_claude(payload: dict) -> str:
     if not CLAUDE_API_KEY:
         return ""
@@ -774,7 +784,7 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
             system     = system_prompt,
             messages   = [{"role": "user", "content": user_prompt}],
         )
-        return message.content[0].text.strip()
+        return extract_text(message)
     except Exception as e:
         print(f"[Claude API Error] {e}")
         return ""
@@ -828,7 +838,7 @@ def call_claude_month(payload: dict) -> str:
             system     = system_prompt,
             messages   = [{"role": "user", "content": user_prompt}],
         )
-        return message.content[0].text.strip()
+        return extract_text(message)
     except Exception as e:
         print(f"[Claude Monthly Error] {e}")
         return ""
