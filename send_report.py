@@ -723,12 +723,17 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
 def extract_text(message) -> str:
     """只取回复里的文字块。
     新模型（Sonnet 5.5 等）thinking 默认开启，content[0] 是 ThinkingBlock，
-    直接取 content[0].text 会报 'ThinkingBlock' object has no attribute 'text'。"""
-    parts = [b.text for b in message.content
-             if getattr(b, 'type', '') == 'text' and hasattr(b, 'text')]
-    if not parts:                      # 保底：捡任何带 text 的块
-        parts = [b.text for b in message.content if hasattr(b, 'text')]
-    return "".join(parts).strip()
+    直接取 content[0].text 会报 'ThinkingBlock' object has no attribute 'text'。
+    思考也吃 max_tokens，额度太小会整段用在思考上、一个字都不输出。"""
+    text = "".join(b.text for b in message.content
+                   if getattr(b, 'type', '') == 'text' and hasattr(b, 'text')).strip()
+    if text:
+        print(f"[AI] 简报 {len(text)} 字")
+    else:
+        kinds = [getattr(b, 'type', '?') for b in message.content]
+        print(f"[AI] 回复里没有文字块！stop_reason={getattr(message, 'stop_reason', None)} "
+              f"blocks={kinds} usage={getattr(message, 'usage', None)}")
+    return text
 
 def call_claude(payload: dict) -> str:
     if not CLAUDE_API_KEY:
@@ -780,7 +785,7 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
         ai_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
         message   = ai_client.messages.create(
             model      = CLAUDE_MODEL,
-            max_tokens = 1200,
+            max_tokens = 8000,     # 思考也算在内，留够空间否则不会输出正文
             system     = system_prompt,
             messages   = [{"role": "user", "content": user_prompt}],
         )
@@ -834,7 +839,7 @@ def call_claude_month(payload: dict) -> str:
         ai_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
         message   = ai_client.messages.create(
             model      = CLAUDE_MODEL,
-            max_tokens = 1600,
+            max_tokens = 10000,    # 思考也算在内，留够空间否则不会输出正文
             system     = system_prompt,
             messages   = [{"role": "user", "content": user_prompt}],
         )
