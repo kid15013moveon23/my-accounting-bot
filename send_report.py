@@ -607,6 +607,102 @@ def load_history(yesterday: datetime) -> dict:
         return {}
 
 # ─── Build Analysis Payload ───────────────────────────────────────────────────
+# ─── 存款区间（统一四档）──────────────────────────────────────────────────────
+# 各平台原始档位有三套，但切点 1000 / 5000 / 50000 都能对齐，归并后可横向比较。
+BUCKET_TIERS = ["小额(<1k)", "中额(1k-5k)", "大额(5k-5万)", "超大额(5万+)"]
+
+# ws=None 代表区间栏就在部门自己的主工作表里（RT 三家）
+# 人数/金额 各是四个列表，分别对应四个档位要加总的列号
+_B8 = {"人数": [[2, 4, 6], [8], [10, 12], [14, 16]],
+       "金额": [[3, 5, 7], [9], [11, 13], [15, 17]]}   # TH/LW/QM/RB 共用的 8 档结构
+
+BUCKET_CFG = {
+    "UED": {"ws": None, "date_col": 0, "direction": "top",
+            "人数": [[38], [40], [42, 44], [46]],
+            "金额": [[39], [41], [43, 45], [47]]},
+    "JX":  {"ws": None, "date_col": 0, "direction": "top",
+            "人数": [[36], [38], [40, 42], [44]],
+            "金额": [[37], [39], [41, 43], [45]]},
+    "TQ":  {"ws": None, "date_col": 0, "direction": "top",
+            "人数": [[36], [38], [40, 42], [44]],
+            "金额": [[37], [39], [41, 43], [45]]},
+    "TH":  {"ws": "每日存款区间人数/线路活跃", "date_col": 0, "direction": "bottom", **_B8},
+    "LW":  {"ws": "日存款区间",              "date_col": 0, "direction": "bottom", **_B8},
+    "QM":  {"ws": "存款区间数据",            "date_col": 0, "direction": "bottom", **_B8},
+    "RB":  {"ws": "存款区间数据",            "date_col": 0, "direction": "bottom", **_B8},
+    # QY 的表切了 16 档，而且只有人数没有金额
+    "QY":  {"ws": "存款区间", "date_col": 0, "direction": "bottom",
+            "人数": [[2, 3, 4, 5], [6], [7, 8, 9], [10, 11, 12, 13, 14, 15, 16, 17]],
+            "金额": None},
+}
+
+def fetch_bucket_rows(dept, dates):
+    """读某部门的存款区间，回传 {YYYY-MM-DD: {"人数": [4档], "金额": [4档] 或 None}}。
+    读不到就回空 dict，绝不影响日报主流程。"""
+    cfg = BUCKET_CFG.get(dept["label"])
+    if not cfg:
+        return {}
+    try:
+        ss = client.open_by_key(dept["sheet_id"])
+        ws = pick_worksheet(ss, cfg["ws"] or dept["worksheet"])
+        all_data = ws.get_all_values()
+        # UED 主表年份只存在原始值里，必须精确比对，否则会抓到去年同日
+        real_dates = (load_real_dates(ws, cfg["date_col"], len(all_data))
+                      if cfg["ws"] is None and dept.get("date_no_year") else None)
+    except Exception as e:
+        print(f"[区间] {dept['label']} 读取失败: {e}")
+        return {}
+
+    out = {}
+    for d in dates:
+        try:
+            row, _, matched = find_data_row(all_data, cfg["direction"], cfg["date_col"], d, real_dates)
+        except Exception as e:
+            print(f"[区间] {dept['label']} {d:%Y-%m-%d} 比对失败: {e}")
+            continue
+        if not row or not matched:
+            continue
+        def tier_sum(cols):
+            return sum(parse_num(row[c]) for c in cols if c < len(row))
+        out[d.strftime('%Y-%m-%d')] = {
+            "人数": [tier_sum(g) for g in cfg["人数"]],
+            "金额": [tier_sum(g) for g in cfg["金额"]] if cfg["金额"] else None,
+        }
+    return out
+
+def build_bucket_payload(yesterday: datetime) -> dict:
+    """八个部门的四档分布：今日、前日、日环比。某家读不到就标注说明。"""
+    prev_day = yesterday - timedelta(days=1)
+    d_today, d_prev = yesterday.strftime('%Y-%m-%d'), prev_day.strftime('%Y-%m-%d')
+    result = {"档位说明": "切点 1000 / 5000 / 50000，各平台原始档位已归并到这四档",
+              "档位": BUCKET_TIERS, "部门": {}}
+
+    for dept in DEPARTMENTS:
+        lb   = dept["label"]
+        rows = fetch_bucket_rows(dept, [yesterday, prev_day])
+        cur, prv = rows.get(d_today), rows.get(d_prev)
+        if not cur:
+            result["部门"][lb] = {"说明": "今日无区间数据，不要当成下降"}
+            continue
+        item = {"今日人数": {t: fmt_num(v) for t, v in zip(BUCKET_TIERS, cur["人数"])}}
+        if cur["金额"] is not None:
+            item["今日金额"] = {t: fmt_num(v) for t, v in zip(BUCKET_TIERS, cur["金额"])}
+            tot = sum(cur["金额"])
+            item["金额占比"] = {t: (f"{v / tot * 100:.1f}%" if tot else "—")
+                                for t, v in zip(BUCKET_TIERS, cur["金额"])}
+        else:
+            item["备注"] = "该表只有人数，没有金额"
+        if prv:
+            item["人数日环比"] = {t: pct_change(a, b)
+                                  for t, a, b in zip(BUCKET_TIERS, cur["人数"], prv["人数"])}
+            if cur["金额"] is not None and prv["金额"] is not None:
+                item["金额日环比"] = {t: pct_change(a, b)
+                                      for t, a, b in zip(BUCKET_TIERS, cur["金额"], prv["金额"])}
+        else:
+            item["备注2"] = "前日无区间数据，无法算日环比"
+        result["部门"][lb] = item
+    return result
+
 def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -> dict:
     mt_members = ["QY", "TH", "LW", "QM", "RB"]
     rt_members = ["UED", "JX", "TQ"]
@@ -755,6 +851,11 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
 
     payload["各部门明细"] = dept_detail
 
+    try:
+        payload["存款区间分布"] = build_bucket_payload(yesterday)
+    except Exception as e:
+        print(f"[区间] 组装失败（忽略）: {e}")
+
     return payload
 
 # ─── Claude AI 分析 ────────────────────────────────────────────────────────────
@@ -825,7 +926,12 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 9. 如数据正常，输出正面总结，不强行找异常。
 10. 「各部门逐一检视」必须**八个部门全部列出**，一个都不能省，即使某个部门一切正常也要写一行说明它正常。
     这一段用的是 JSON 里的「各部门明细」，每个部门都有今日值、日环比、日均环比、周同比、首存转化率。
-11. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 1200 字以内。"""
+11. 「存款区间结构」用 JSON 里的「存款区间分布」。各平台原始档位不同，已统一归并为
+    小额(<1k)／中额(1k-5k)／大额(5k-5万)／超大额(5万+) 四档，可以横向比较。
+    这一段只报重点：每个部门指出**掉最多的那一档**和**表现最好的那一档**，不要把四档全部罗列。
+    判断「掉最多」以金额日环比为主、人数日环比为辅；QY 只有人数，就只看人数。
+    若某部门标注无区间数据，写「无区间数据」即可，不要推测，更不要当成下降。
+12. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 1500 字以内。"""
 
     user_prompt = f"""以下是今日经营数据与历史对比（JSON 格式）：
 
@@ -847,6 +953,12 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 ▪ [部门] 存款 X（日环比 ±X%，日均环比 ±X%）｜首存转化 X%｜存提差 X → 状态
 「状态」只用三种开头之一：正常／留意／异常，后面跟一句不超过 20 字的判断。
 正常的部门也要列，写一句「各项持平」之类即可，不要省略。）
+
+【存款区间结构】
+（统一四档：小额<1k／中额1k-5k／大额5k-5万／超大额5万+，与前日比。
+八个部门各一行，格式：
+▪ [部门] 掉最多：X档（人数±%、金额±%）｜最佳：X档（±%）→ 一句话判断
+最后补一句总结：整体是大额玩家在流失，还是小额在萎缩。）
 
 【部门异常提醒】
 （从上面挑出最需要处理的，最多3条，格式：▶ [部门] 异常指标 → 可能原因 → 建议）
