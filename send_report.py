@@ -717,6 +717,44 @@ def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -
                     "MT注册": pct_change(month_total('注册', mt_members), last_total('注册', mt_members)),
                 }
 
+    # ── 各部门逐一对比：让 AI 能八个部门都点到，而不是只挑重大的 ──
+    hist       = history or {}
+    prev_d     = hist.get('前日数据', {}) or {}
+    w7_d       = hist.get('7天前数据', {}) or {}
+    month_d    = hist.get('本月历史累计', {}) or {}
+    days_n     = hist.get('本月天数', yesterday.day)
+
+    def dval(src, label, field):
+        return parse_num((src.get(label) or {}).get(field, '0'))
+
+    dept_detail = {}
+    for dept in DEPARTMENTS:
+        lb  = dept["label"]
+        cur = {f: dval(dept_raw, lb, f) for f in HISTORY_FIELDS}
+        reg, fst = cur.get('注册', 0), cur.get('首存', 0)
+        item = {
+            "组别":       dept["group"],
+            "今日":       {f: fmt_num(cur[f]) for f in HISTORY_FIELDS},
+            "首存转化率": f"{fst / reg * 100:.1f}%" if reg else "—",
+        }
+        # 源表没填时各项都是 0，算出来会变成「-100%」，会被误读成暴跌
+        if not dept_raw.get(lb) or not any(cur.values()):
+            item["状态"] = "今日源表无数据，所有同比环比不可用，不要当成下跌"
+            dept_detail[lb] = item
+            continue
+        if prev_d:
+            item["日环比"] = {f: pct_change(cur[f], dval(prev_d, lb, f)) for f in HISTORY_FIELDS}
+        if w7_d:
+            item["周同比"] = {f: pct_change(cur[f], dval(w7_d, lb, f))
+                              for f in ('注册', '首存', '存款', '活跃')}
+        if month_d:
+            avg = {f: (dval(month_d, lb, f) + cur[f]) / max(days_n, 1) for f in HISTORY_FIELDS}
+            item["本月日均"] = {f: fmt_num(avg[f]) for f in HISTORY_FIELDS}
+            item["日均环比"] = {f: pct_change(cur[f], avg[f]) for f in HISTORY_FIELDS}
+        dept_detail[lb] = item
+
+    payload["各部门明细"] = dept_detail
+
     return payload
 
 # ─── Claude AI 分析 ────────────────────────────────────────────────────────────
@@ -785,7 +823,9 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 7. 月同比数据体现月度经营趋势，是判断整体走势的最重要指标。
 8. 日均环比（今日 vs 本月日均）是衡量今日表现的基准线：高于日均说明今日好于本月平均水平，低于则相反；偏离超过±15%需重点说明原因。
 9. 如数据正常，输出正面总结，不强行找异常。
-10. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 700 字以内。"""
+10. 「各部门逐一检视」必须**八个部门全部列出**，一个都不能省，即使某个部门一切正常也要写一行说明它正常。
+    这一段用的是 JSON 里的「各部门明细」，每个部门都有今日值、日环比、日均环比、周同比、首存转化率。
+11. 输出简体中文，语气简洁专业，适合 Telegram 阅读，总字数控制在 1200 字以内。"""
 
     user_prompt = f"""以下是今日经营数据与历史对比（JSON 格式）：
 
@@ -802,8 +842,14 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
 周同比：（本日 vs 7天前，整体走势判断）
 月累计：（本月 vs 上月同期，月度进展评估）
 
+【各部门逐一检视】
+（八个部门**全部列出**，先 MT 组 QY／TH／LW／QM／RB，再 RT 组 UED／JX／TQ，每个部门一行：
+▪ [部门] 存款 X（日环比 ±X%，日均环比 ±X%）｜首存转化 X%｜存提差 X → 状态
+「状态」只用三种开头之一：正常／留意／异常，后面跟一句不超过 20 字的判断。
+正常的部门也要列，写一句「各项持平」之类即可，不要省略。）
+
 【部门异常提醒】
-（最多3条，格式：▶ [部门] 异常指标 → 可能原因 → 建议）
+（从上面挑出最需要处理的，最多3条，格式：▶ [部门] 异常指标 → 可能原因 → 建议）
 
 【需要跟进事项】
 （3-5 条可执行建议，直接给运营主管执行）
