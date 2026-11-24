@@ -973,7 +973,7 @@ MT组：QY、TH、LW、QM、RB；RT组：UED、JX、TQ。
         ai_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
         message   = ai_client.messages.create(
             model      = CLAUDE_MODEL,
-            max_tokens = 8000,     # 思考也算在内，留够空间否则不会输出正文
+            max_tokens = 20000,    # 思考也算在内；资料变多后 8000 会被思考用光，正文输不出来
             system     = system_prompt,
             messages   = [{"role": "user", "content": user_prompt}],
         )
@@ -1027,7 +1027,7 @@ def call_claude_month(payload: dict) -> str:
         ai_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
         message   = ai_client.messages.create(
             model      = CLAUDE_MODEL,
-            max_tokens = 10000,    # 思考也算在内，留够空间否则不会输出正文
+            max_tokens = 24000,    # 思考也算在内；月度资料更大，额度要更宽
             system     = system_prompt,
             messages   = [{"role": "user", "content": user_prompt}],
         )
