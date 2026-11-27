@@ -34,7 +34,7 @@ creds    = Credentials.from_service_account_info(SA_JSON, scopes=SCOPES)
 client   = gspread.authorize(creds)
 
 DEPARTMENTS = [
-    {"label":"UED","group":"RT","sheet_id":"1a7ZBESgUweasFGf2FfDx1TbMvb1onS-knTU7cx2I13g","worksheet":"每日明细","date_col":0,"direction":"top","date_no_year":True,"columns":{"注册":25,"首存":26,"存款":3,"提款":4,"存提差":5,"活跃":18}},
+    {"label":"UED","group":"RT","sheet_id":"1a7ZBESgUweasFGf2FfDx1TbMvb1onS-knTU7cx2I13g","worksheet":"每日明细","date_col":0,"direction":"top","date_no_year":True,"columns":{"注册":25,"首存":28,"存款":3,"提款":4,"存提差":5,"活跃":18}},
     {"label":"RB","group":"MT","sheet_id":"1iErwKLMSsPEcnYravOzhMGuTiZBBUYedggr84UU8Ilo","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
     {"label":"QM","group":"MT","sheet_id":"1drz_NT2aTiPHfvX-xOmJR72q-o9Mk9hucPGTfTfFLmI","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":2,"存款":8,"提款":11,"存提差":12,"活跃":9}},
     {"label":"QY","group":"MT","sheet_id":"1NMOTloCNN7lDpa2Wjtehcdx75UU7Rx7HAepXYv5SgB0","worksheet":"每日数据","date_col":0,"direction":"bottom","columns":{"注册":1,"首存":3,"存款":9,"提款":12,"存提差":13,"活跃":10}},
