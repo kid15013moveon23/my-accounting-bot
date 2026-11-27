@@ -51,7 +51,8 @@ DEPARTMENTS = [
         "direction": "top",
         "date_no_year": True,   # 日期只显示「8/1」不含年份，且按月倒序堆叠，须用原始日期比对
         "columns": {
-            "注册": 25, "首存": 26,
+            "注册": 25,          # 25=总注册
+            "首存": 28,          # 28=每日新增首存数；26 是「直播注册」，别再抓错
             "存款": 3,  "提款": 4, "存提差": 5,
             "活跃": 18,
         },
@@ -702,6 +703,24 @@ def build_bucket_payload(yesterday: datetime) -> dict:
             item["备注2"] = "前日无区间数据，无法算日环比"
         result["部门"][lb] = item
     return result
+
+# 人数类字段的合理上限：正常最大约 2.5 万（RT 活跃），超过 10 万必定是源表错位
+PEOPLE_FIELDS = ("注册", "首存", "活跃")
+PEOPLE_MAX    = 100000
+
+def sanity_check(dept_raw: dict) -> list:
+    """把明显错位的人数值挡下来，不让它写进历史表污染趋势图。
+    回传告警清单；被挡下的字段改成「—」，当作没抓到。"""
+    alerts = []
+    for label, raw in (dept_raw or {}).items():
+        if not raw:
+            continue
+        for f in PEOPLE_FIELDS:
+            v = parse_num(raw.get(f, '0'))
+            if v > PEOPLE_MAX:
+                alerts.append(f"{label} {f} = {fmt_num(v)}")
+                raw[f] = "—"
+    return alerts
 
 def build_analysis_payload(yesterday: datetime, dept_raw: dict, history: dict) -> dict:
     mt_members = ["QY", "TH", "LW", "QM", "RB"]
@@ -1433,7 +1452,11 @@ async def main():
         dept_raw[dept["label"]]     = raw
         blocks.append(text)
 
-    # 3. 保存今日数据到历史 Sheet
+    # 3. 保存今日数据到历史 Sheet（先挡掉明显错位的数值）
+    sanity_alerts = sanity_check(dept_raw)
+    if sanity_alerts:
+        for a in sanity_alerts:
+            print(f"[异常值] 已挡下 {a}")
     save_to_history(yesterday, dept_raw)
 
     # 4. 构建原始数据日报（备用）
@@ -1493,7 +1516,16 @@ async def main():
             text="⚠️ AI 分析暂时不可用，已发送原始数据日报。"
         )
 
-    # 8. 模型生命周期检查：被标成 deprecated/retired 才出声
+    # 8. 源表错位提醒：人数类字段大到不合理，多半是当下源表还在编辑
+    if sanity_alerts:
+        await bot.send_message(
+            chat_id=TG_CHAT_ID,
+            text=("⚠️ 以下数值明显异常，已当作「无数据」挡下，没有写进历史表：\n\n"
+                  + "\n".join("· " + a for a in sanity_alerts)
+                  + "\n\n多半是抓取当下源表还在编辑。源表填好后，"
+                    f"发 /update {yesterday:%Y-%m-%d} 可重抓。"))
+
+    # 9. 模型生命周期检查：被标成 deprecated/retired 才出声
     note = check_model_status()
     if note:
         await bot.send_message(chat_id=TG_CHAT_ID, text=note)
